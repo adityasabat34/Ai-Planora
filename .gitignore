@@ -1,0 +1,21 @@
+# Dependencies, build output, and test artifacts
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.next/
+out/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Logs and local tooling files
+*.log
+.eslintcache
+.DS_Store
+Thumbs.db
+
+# Local project notes
+/md/
