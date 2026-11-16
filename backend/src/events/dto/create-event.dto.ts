@@ -5,9 +5,9 @@ export class CreateEventDto {
     @IsNotEmpty()
     title!: string;
 
-    //   @IsISO8601()
-    //   startTime!: string;
+    @IsISO8601()
+    startTime!: string;
 
-    //   @IsISO8601()
-    //   endTime!: string;
+    @IsISO8601()
+    endTime!: string;
 }

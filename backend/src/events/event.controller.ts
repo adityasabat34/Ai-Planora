@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, ValidationPipe } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, ValidationPipe } from "@nestjs/common";
 import { EventService } from "./event.service.js";
 import { CreateEventDto } from "./dto/create-event.dto.js";
 
@@ -12,12 +12,12 @@ export class EventController {
     }
 
     @Get(":id")
-    getEvent(): string {
-        return "hello from me"
+    getEvent(@Param("id") id: string) {
+        return this.eventService.getHelloWorldById(id)
     }
 
     @Post()
-    createEvent(@Body(new ValidationPipe()) body: CreateEventDto): string {
+    createEvent(@Body(new ValidationPipe()) body: CreateEventDto) {
         return this.eventService.createEvent(body);
     }
 }
