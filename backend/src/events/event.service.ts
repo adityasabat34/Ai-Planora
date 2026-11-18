@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { CreateEventDto } from './dto/create-event.dto.js';
 
 type Event = {
@@ -17,8 +17,12 @@ export class EventService {
         return 'Hello World from service!';
     }
 
-    getHelloWorldById(id: string): string {
-        return `hello world, event ID: ${id}`;
+    getHelloWorldById(id: string): Event {
+        const event = this.events.find((event) => event.id === id);
+        if (!event) {
+            throw new NotFoundException(`Event with this ${id} does not exist`)
+        }
+        return event;
     }
 
     createEvent(body: CreateEventDto): Event {
