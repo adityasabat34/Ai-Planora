@@ -15,6 +15,6 @@ export class AuthController {
         }))
         body: RegisterDto
     ) {
-        //    return this.authService.register(body);     
+        return this.authService.register(body);
     }
 }
