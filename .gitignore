@@ -1,5 +1,6 @@
 # Dependencies, build output, and test artifacts
 node_modules/
+/backend/src/generated/prisma/
 dist/
 coverage/
 *.tsbuildinfo
