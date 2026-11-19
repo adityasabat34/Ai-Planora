@@ -26,6 +26,6 @@ export class RegisterDto {
     username!: string;
 
     @IsString()
-    @Length(12, 72)
+    @Length(7, 50)
     password!: string;
 }

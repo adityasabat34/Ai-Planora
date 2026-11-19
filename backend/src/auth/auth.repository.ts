@@ -34,4 +34,18 @@ export class AuthRepository {
             throw error;
         }
     }
+
+    async findUserByEmail(email: string) {
+        return this.prisma.user.findUnique({
+            where: { email },
+            select: {
+                id: true,
+                fullName: true,
+                email: true,
+                username: true,
+                signInMethod: true,
+                passwordHash: true,
+            },
+        });
+    }
 }

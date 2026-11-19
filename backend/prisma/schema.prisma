@@ -21,4 +21,17 @@ model User {
   passwordHash String?
   googleSub    String?      @unique
   createdAt    DateTime     @default(now()) @db.Timestamptz
+  sessions     Session[]
+}
+
+model Session {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @db.Uuid
+  refreshTokenHash String   @unique @db.VarChar(64)
+  expiresAt        DateTime @db.Timestamptz
+  createdAt        DateTime @default(now()) @db.Timestamptz
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
