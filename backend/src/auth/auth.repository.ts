@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma, SignInMethod } from '../generated/prisma/client.js';
-import type { CreatePasswordUserInput } from './auth.types.js';
+import type { CreatePasswordUserInput, CreateSessionInput } from './auth.types.js';
+
 
 export class DuplicateAccountError extends Error { }
 
@@ -47,5 +48,15 @@ export class AuthRepository {
                 passwordHash: true,
             },
         });
+    }
+
+    async createSession(input: CreateSessionInput) {
+        return await this.prisma.session.create({
+            data: input,
+            select: {
+                id: true,
+                expiresAt: true
+            }
+        })
     }
 }

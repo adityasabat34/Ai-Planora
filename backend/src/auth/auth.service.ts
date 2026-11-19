@@ -2,10 +2,13 @@ import {
     BadRequestException,
     ConflictException,
     Injectable,
+    UnauthorizedException
 } from '@nestjs/common';
 import bcrypt from 'bcrypt';
 import { AuthRepository, DuplicateAccountError } from './auth.repository.js';
 import type { RegisterDto } from './dto/register.dto.js';
+import { SignInMethod } from '../generated/prisma/client.js';
+import type { LoginDto } from './dto/login.dto.js';
 
 const BCRYPT_COST = 12;
 
@@ -34,5 +37,35 @@ export class AuthService {
 
             throw error;
         }
+    }
+
+    async validateCredential({ email, password }: LoginDto) {
+        const user = await this.authRepository.findUserByEmail(email)
+
+        if (!user) {
+            throw new UnauthorizedException("Invalid email or password")
+        }
+
+        if (user.signInMethod === SignInMethod.GOOGLE) {
+            throw new UnauthorizedException("Continue with Google to sign in")
+        }
+
+        if (!user.passwordHash) {
+            throw new UnauthorizedException("Invalid email or password")
+        }
+
+        const isPasswordValid = await bcrypt.compare(password, user.passwordHash)
+
+        if (!isPasswordValid) {
+            throw new UnauthorizedException('Invalid email or password');
+        }
+
+        return {
+            id: user.id,
+            fullName: user.fullName,
+            email: user.email,
+            username: user.username,
+        };
+
     }
 }
