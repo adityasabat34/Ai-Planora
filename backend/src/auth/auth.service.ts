@@ -9,12 +9,16 @@ import { AuthRepository, DuplicateAccountError } from './auth.repository.js';
 import type { RegisterDto } from './dto/register.dto.js';
 import { SignInMethod } from '../generated/prisma/client.js';
 import type { LoginDto } from './dto/login.dto.js';
+import { AuthTokensService } from './auth.tokens.service.js';
 
 const BCRYPT_COST = 12;
 
 @Injectable()
 export class AuthService {
-    constructor(private readonly authRepository: AuthRepository) { }
+    constructor(
+        private readonly authRepository: AuthRepository,
+        private readonly authTokensService: AuthTokensService,
+    ) { }
 
     async register({ fullName, email, username, password }: RegisterDto) {
         if (Buffer.byteLength(password, 'utf8') > 72) {
@@ -39,7 +43,30 @@ export class AuthService {
         }
     }
 
+    async login(input: LoginDto) {
+        const user = await this.validateCredential(input);
+        const tokens = await this.authTokensService.createTokens(user.id);
+
+        await this.authRepository.createSession({
+            userId: user.id,
+            refreshTokenHash: tokens.refreshTokenHash,
+            expiresAt: tokens.refreshExpiresAt,
+        });
+
+        return {
+            user,
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            refreshExpiresAt: tokens.refreshExpiresAt,
+        };
+    }
+
     async validateCredential({ email, password }: LoginDto) {
+        // bcrypt ignores bytes beyond 72, so reject passwords it would truncate.
+        if (Buffer.byteLength(password, 'utf8') > 72) {
+            throw new UnauthorizedException('Invalid email or password');
+        }
+
         const user = await this.authRepository.findUserByEmail(email)
 
         if (!user) {

@@ -1,10 +1,17 @@
-import { Body, Controller, Post, ValidationPipe } from "@nestjs/common"
+import { Body, Controller, Header, HttpCode, HttpStatus, Post, Res, ValidationPipe } from "@nestjs/common"
+import { ConfigService } from '@nestjs/config';
+import type { Response } from 'express';
 import { AuthService } from './auth.service.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { LoginDto } from './dto/login.dto.js';
+import { AUTH_COOKIE_NAMES, createAuthCookieOptions } from './auth.cookies.js';
 
 @Controller("auth")
 export class AuthController {
-    constructor(private readonly authService: AuthService) { }
+    constructor(
+        private readonly authService: AuthService,
+        private readonly config: ConfigService,
+    ) { }
 
     @Post("register")
     register(
@@ -16,5 +23,31 @@ export class AuthController {
         body: RegisterDto
     ) {
         return this.authService.register(body);
+    }
+
+    @Post('login')
+    @HttpCode(HttpStatus.OK)
+    @Header('Cache-Control', 'no-store')
+    async login(
+        @Body(new ValidationPipe({
+            transform: true,
+            whitelist: true,
+            forbidNonWhitelisted: true,
+        }))
+        body: LoginDto,
+        @Res({ passthrough: true }) response: Response,
+    ) {
+        const { user, accessToken, refreshToken, refreshExpiresAt } =
+            await this.authService.login(body);
+
+        const cookieOptions = createAuthCookieOptions(
+            this.config.get<string>('NODE_ENV') === 'production',
+            refreshExpiresAt,
+        );
+
+        response.cookie(AUTH_COOKIE_NAMES.accessToken, accessToken, cookieOptions.accessToken);
+        response.cookie(AUTH_COOKIE_NAMES.refreshToken, refreshToken, cookieOptions.refreshToken);
+
+        return user;
     }
 }

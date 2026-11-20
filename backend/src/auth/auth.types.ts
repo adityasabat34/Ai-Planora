@@ -5,9 +5,15 @@ export type CreatePasswordUserInput = {
     passwordHash: string;
 }
 
-
 export type CreateSessionInput = {
     userId: string;
     refreshTokenHash: string;
     expiresAt: Date;
+};
+
+export type AuthTokens = {
+    accessToken: string;
+    refreshToken: string;
+    refreshTokenHash: string;
+    refreshExpiresAt: Date;
 };
