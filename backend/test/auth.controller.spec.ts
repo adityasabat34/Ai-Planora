@@ -13,7 +13,7 @@ import { createJwtOptions } from '../src/auth/config/jwt.config.js';
 import { SignInMethod } from '../src/generated/prisma/client.js';
 import type { CreateSessionInput } from '../src/auth/auth.types.js';
 
-describe('POST /auth/login', () => {
+describe('Auth endpoints', () => {
   let app: INestApplication;
   let passwordHash: string;
   let jwt: JwtService;
@@ -27,6 +27,7 @@ describe('POST /auth/login', () => {
   const repository = {
     findUserByEmail: vi.fn<AuthRepository['findUserByEmail']>(),
     createSession: vi.fn<AuthRepository['createSession']>(),
+    findSessionByRefreshTokenHash: vi.fn<AuthRepository['findSessionByRefreshTokenHash']>(),
   };
   const config = new ConfigService({
     JWT_ACCESS_SECRET: 'login-test-secret-used-only-in-tests',
@@ -74,7 +75,7 @@ describe('POST /auth/login', () => {
       .send({ email: ' LOGIN@EXAMPLE.COM ', password })
       .expect(200);
 
-    expect(response.body).toEqual(publicUser);
+    expect(response.body).toEqual({ ...publicUser, token: expect.any(String) });
     expect(response.headers['cache-control']).toBe('no-store');
     expect(repository.findUserByEmail).toHaveBeenCalledWith(publicUser.email);
 
@@ -93,6 +94,7 @@ describe('POST /auth/login', () => {
     const accessToken = accessCookie.split(';')[0]!.slice('access_token='.length);
     const refreshToken = refreshCookie.split(';')[0]!.slice('refresh_token='.length);
     const claims = await jwt.verifyAsync<{ sub: string; iat: number; exp: number }>(accessToken);
+    expect(response.body.token).toBe(accessToken);
     expect(claims.sub).toBe(publicUser.id);
     expect(claims.exp - claims.iat).toBe(900);
     expect(refreshToken).toMatch(/^[a-f0-9]{64}$/);
@@ -146,6 +148,75 @@ describe('POST /auth/login', () => {
       expect(response.headers['set-cookie']).toBeUndefined();
     },
   );
+
+  it('refreshes repeatedly using the same session and sets only the access cookie', async () => {
+    const refreshToken = 'a'.repeat(64);
+    const expiresAt = new Date(Date.now() + 86400000);
+    repository.findSessionByRefreshTokenHash.mockResolvedValue({
+      userId: publicUser.id,
+      expiresAt,
+    });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', `refresh_token=${refreshToken}`)
+        .expect(200);
+
+      const claims = await jwt.verifyAsync<{ sub: string; iat: number; exp: number }>(response.body.token);
+      expect(claims.sub).toBe(publicUser.id);
+      expect(claims.exp - claims.iat).toBe(900);
+      expect(response.headers['cache-control']).toBe('no-store');
+      const cookies = response.headers['set-cookie'] as unknown as string[];
+      expect(cookies).toHaveLength(1);
+      expect(cookies[0]).toContain(`access_token=${response.body.token};`);
+      expect(cookies[0]).toContain('Max-Age=900');
+      expect(cookies[0]).toContain('HttpOnly');
+      expect(cookies[0]).toContain('Secure');
+      expect(cookies[0]).toContain('SameSite=Strict');
+      expect(cookies[0]).toContain('Path=/;');
+    }
+
+    expect(repository.findSessionByRefreshTokenHash).toHaveBeenCalledTimes(2);
+    expect(repository.findSessionByRefreshTokenHash).toHaveBeenCalledWith(
+      createHash('sha256').update(refreshToken).digest('hex'),
+    );
+    expect(repository.createSession).not.toHaveBeenCalled();
+    expect(expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it.each([undefined, '', 'not-a-token', 'A'.repeat(64), 'b'.repeat(63)])(
+    'rejects a missing or malformed refresh cookie (%s)', async (token) => {
+      const pending = request(app.getHttpServer()).post('/auth/refresh');
+      if (token !== undefined) pending.set('Cookie', `refresh_token=${token}`);
+      const response = await pending.expect(401);
+      expect(response.headers['set-cookie']).toBeUndefined();
+      expect(repository.findSessionByRefreshTokenHash).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['unknown', 'expired'])('rejects an %s refresh session', async (scenario) => {
+    repository.findSessionByRefreshTokenHash.mockResolvedValue(scenario === 'unknown' ? null : {
+      userId: publicUser.id,
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    const response = await request(app.getHttpServer())
+      .post('/auth/refresh')
+      .set('Cookie', `refresh_token=${'b'.repeat(64)}`)
+      .expect(401);
+    expect(response.body.message).toBe('Invalid or expired refresh token');
+    expect(response.headers['set-cookie']).toBeUndefined();
+    expect(repository.createSession).not.toHaveBeenCalled();
+  });
+
+  it('sends no access cookie if the refresh session lookup fails', async () => {
+    repository.findSessionByRefreshTokenHash.mockRejectedValue(new Error('database unavailable'));
+    const response = await request(app.getHttpServer())
+      .post('/auth/refresh')
+      .set('Cookie', `refresh_token=${'b'.repeat(64)}`)
+      .expect(500);
+    expect(response.headers['set-cookie']).toBeUndefined();
+  });
 
   it('sends no cookies when saving the session fails', async () => {
     repository.createSession.mockRejectedValue(new Error('database unavailable'));

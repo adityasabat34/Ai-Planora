@@ -1,4 +1,4 @@
-import { Body, Controller, Header, HttpCode, HttpStatus, Post, Res, ValidationPipe } from "@nestjs/common"
+import { Body, Controller, Cookies, Header, HttpCode, HttpStatus, Post, Res, ValidationPipe } from "@nestjs/common"
 import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { AuthService } from './auth.service.js';
@@ -25,6 +25,23 @@ export class AuthController {
         return this.authService.register(body);
     }
 
+    @Post('refresh')
+    @HttpCode(HttpStatus.OK)
+    @Header('Cache-Control', 'no-store')
+    async refresh(
+        @Cookies(AUTH_COOKIE_NAMES.refreshToken) refreshToken: unknown,
+        @Res({ passthrough: true }) response: Response,
+    ) {
+        const { accessToken, refreshExpiresAt } = await this.authService.refresh(refreshToken);
+        const cookieOptions = createAuthCookieOptions(
+            this.config.get<string>('NODE_ENV') === 'production',
+            refreshExpiresAt,
+        );
+
+        response.cookie(AUTH_COOKIE_NAMES.accessToken, accessToken, cookieOptions.accessToken);
+        return { token: accessToken };
+    }
+
     @Post('login')
     @HttpCode(HttpStatus.OK)
     @Header('Cache-Control', 'no-store')
@@ -48,6 +65,9 @@ export class AuthController {
         response.cookie(AUTH_COOKIE_NAMES.accessToken, accessToken, cookieOptions.accessToken);
         response.cookie(AUTH_COOKIE_NAMES.refreshToken, refreshToken, cookieOptions.refreshToken);
 
-        return user;
+        return {
+            ...user,
+            token: accessToken,
+        };
     }
 }

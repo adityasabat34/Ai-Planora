@@ -61,6 +61,22 @@ export class AuthService {
         };
     }
 
+    async refresh(refreshToken: unknown) {
+        if (typeof refreshToken !== 'string' || !/^[a-f0-9]{64}$/.test(refreshToken)) {
+            throw new UnauthorizedException('Invalid or expired refresh token');
+        }
+
+        const refreshTokenHash = this.authTokensService.hashRefreshToken(refreshToken);
+        const session = await this.authRepository.findSessionByRefreshTokenHash(refreshTokenHash);
+
+        if (!session || session.expiresAt.getTime() <= Date.now()) {
+            throw new UnauthorizedException('Invalid or expired refresh token');
+        }
+
+        const accessToken = await this.authTokensService.createAccessToken(session.userId);
+        return { accessToken, refreshExpiresAt: session.expiresAt };
+    }
+
     async validateCredential({ email, password }: LoginDto) {
         // bcrypt ignores bytes beyond 72, so reject passwords it would truncate.
         if (Buffer.byteLength(password, 'utf8') > 72) {

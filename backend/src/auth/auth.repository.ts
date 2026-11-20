@@ -50,6 +50,16 @@ export class AuthRepository {
         });
     }
 
+    async findSessionByRefreshTokenHash(refreshTokenHash: string) {
+        return this.prisma.session.findUnique({
+            where: { refreshTokenHash },
+            select: {
+                userId: true,
+                expiresAt: true,
+            },
+        });
+    }
+
     async createSession(input: CreateSessionInput) {
         return await this.prisma.session.create({
             data: input,
