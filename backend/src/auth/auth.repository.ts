@@ -60,6 +60,12 @@ export class AuthRepository {
         });
     }
 
+    async deleteSessionByRefreshTokenHash(refreshTokenHash: string) {
+        return this.prisma.session.deleteMany({
+            where: { refreshTokenHash },
+        });
+    }
+
     async createSession(input: CreateSessionInput) {
         return await this.prisma.session.create({
             data: input,

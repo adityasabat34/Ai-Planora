@@ -4,7 +4,7 @@ import type { Response } from 'express';
 import { AuthService } from './auth.service.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
-import { AUTH_COOKIE_NAMES, createAuthCookieOptions } from './auth.cookies.js';
+import { AUTH_COOKIE_NAMES, createAuthCookieClearOptions, createAuthCookieOptions } from './auth.cookies.js';
 
 @Controller("auth")
 export class AuthController {
@@ -23,6 +23,22 @@ export class AuthController {
         body: RegisterDto
     ) {
         return this.authService.register(body);
+    }
+
+    @Post('logout')
+    @HttpCode(HttpStatus.NO_CONTENT)
+    @Header('Cache-Control', 'no-store')
+    async logout(
+        @Cookies(AUTH_COOKIE_NAMES.refreshToken) refreshToken: unknown,
+        @Res({ passthrough: true }) response: Response,
+    ) {
+        await this.authService.logout(refreshToken);
+
+        const cookieOptions = createAuthCookieClearOptions(
+            this.config.get<string>('NODE_ENV') === 'production',
+        );
+        response.clearCookie(AUTH_COOKIE_NAMES.accessToken, cookieOptions.accessToken);
+        response.clearCookie(AUTH_COOKIE_NAMES.refreshToken, cookieOptions.refreshToken);
     }
 
     @Post('refresh')

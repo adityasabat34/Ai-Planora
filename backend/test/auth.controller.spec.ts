@@ -28,6 +28,7 @@ describe('Auth endpoints', () => {
     findUserByEmail: vi.fn<AuthRepository['findUserByEmail']>(),
     createSession: vi.fn<AuthRepository['createSession']>(),
     findSessionByRefreshTokenHash: vi.fn<AuthRepository['findSessionByRefreshTokenHash']>(),
+    deleteSessionByRefreshTokenHash: vi.fn<AuthRepository['deleteSessionByRefreshTokenHash']>(),
   };
   const config = new ConfigService({
     JWT_ACCESS_SECRET: 'login-test-secret-used-only-in-tests',
@@ -215,6 +216,60 @@ describe('Auth endpoints', () => {
       .post('/auth/refresh')
       .set('Cookie', `refresh_token=${'b'.repeat(64)}`)
       .expect(500);
+    expect(response.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('logs out repeatedly, deleting by hash and expiring cookies at their original paths', async () => {
+    const refreshToken = 'c'.repeat(64);
+    repository.deleteSessionByRefreshTokenHash
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await request(app.getHttpServer())
+        .post('/auth/logout')
+        .set('Cookie', `refresh_token=${refreshToken}`)
+        .expect(204);
+
+      expect(response.text).toBe('');
+      expect(response.headers['cache-control']).toBe('no-store');
+      const cookies = response.headers['set-cookie'] as unknown as string[];
+      expect(cookies).toHaveLength(2);
+      expect(cookies.find(cookie => cookie.startsWith('access_token=;'))).toContain('Path=/;');
+      expect(cookies.find(cookie => cookie.startsWith('refresh_token=;'))).toContain('Path=/auth;');
+      for (const cookie of cookies) {
+        expect(cookie).toContain('HttpOnly');
+        expect(cookie).toContain('Secure');
+        expect(cookie).toContain('SameSite=Strict');
+        expect(cookie).not.toContain('Max-Age=900');
+        const expiry = /Expires=([^;]+)/.exec(cookie)![1]!;
+        expect(new Date(expiry).getTime()).toBeLessThan(Date.now());
+      }
+    }
+
+    expect(repository.deleteSessionByRefreshTokenHash).toHaveBeenCalledTimes(2);
+    expect(repository.deleteSessionByRefreshTokenHash).toHaveBeenCalledWith(
+      createHash('sha256').update(refreshToken).digest('hex'),
+    );
+  });
+
+  it.each([undefined, '', 'invalid-token'])(
+    'clears cookies when logging out with a missing or malformed token (%s)', async (token) => {
+      const pending = request(app.getHttpServer()).post('/auth/logout');
+      if (token !== undefined) pending.set('Cookie', `refresh_token=${token}`);
+      const response = await pending.expect(204);
+      expect(response.headers['set-cookie']).toHaveLength(2);
+      expect(repository.deleteSessionByRefreshTokenHash).not.toHaveBeenCalled();
+    },
+  );
+
+  it('returns a failure when session deletion fails', async () => {
+    repository.deleteSessionByRefreshTokenHash.mockRejectedValue(new Error('database unavailable'));
+    const response = await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Cookie', `refresh_token=${'d'.repeat(64)}`)
+      .expect(500);
+    expect(response.body.message).toBe('Internal server error');
     expect(response.headers['set-cookie']).toBeUndefined();
   });
 

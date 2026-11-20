@@ -1,3 +1,9 @@
+import type { Request } from 'express';
+
+export type AuthenticatedRequest = Request & {
+    user: { id: string };
+};
+
 export type CreatePasswordUserInput = {
     fullName: string;
     email: string;

@@ -61,6 +61,15 @@ export class AuthService {
         };
     }
 
+    async logout(refreshToken: unknown): Promise<void> {
+        if (typeof refreshToken !== 'string' || !/^[a-f0-9]{64}$/.test(refreshToken)) {
+            return;
+        }
+
+        const refreshTokenHash = this.authTokensService.hashRefreshToken(refreshToken);
+        await this.authRepository.deleteSessionByRefreshTokenHash(refreshTokenHash);
+    }
+
     async refresh(refreshToken: unknown) {
         if (typeof refreshToken !== 'string' || !/^[a-f0-9]{64}$/.test(refreshToken)) {
             throw new UnauthorizedException('Invalid or expired refresh token');

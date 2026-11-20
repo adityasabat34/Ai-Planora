@@ -7,6 +7,7 @@ import { createJwtOptions } from './config/jwt.config.js';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthTokensService } from './auth.tokens.service.js';
+import { AccessTokenGuard } from './access-token.guard.js';
 
 @Module({
     imports: [
@@ -19,6 +20,7 @@ import { AuthTokensService } from './auth.tokens.service.js';
         }),
     ],
     controllers: [AuthController],
-    providers: [AuthService, AuthRepository, AuthTokensService],
+    providers: [AuthService, AuthRepository, AuthTokensService, AccessTokenGuard],
+    exports: [AccessTokenGuard, AuthTokensService],
 })
 export class AuthModule { }
