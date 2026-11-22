@@ -10,6 +10,7 @@ import type { RegisterDto } from './dto/register.dto.js';
 import { SignInMethod } from '../generated/prisma/client.js';
 import type { LoginDto } from './dto/login.dto.js';
 import { AuthTokensService } from './auth.tokens.service.js';
+import type { AuthSession, PublicUser } from './auth.types.js';
 
 const BCRYPT_COST = 12;
 
@@ -36,6 +37,10 @@ export class AuthService {
             });
         } catch (error) {
             if (error instanceof DuplicateAccountError) {
+                const existing = await this.authRepository.findUserByEmail(email);
+                if (existing?.signInMethod === SignInMethod.GOOGLE) {
+                    throw new ConflictException('This email uses Google sign-in. Continue with Google');
+                }
                 throw new ConflictException(error.message);
             }
 
@@ -45,6 +50,10 @@ export class AuthService {
 
     async login(input: LoginDto) {
         const user = await this.validateCredential(input);
+        return this.createSessionForUser(user);
+    }
+
+    async createSessionForUser(user: PublicUser): Promise<AuthSession> {
         const tokens = await this.authTokensService.createTokens(user.id);
 
         await this.authRepository.createSession({

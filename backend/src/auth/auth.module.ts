@@ -8,6 +8,10 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthTokensService } from './auth.tokens.service.js';
 import { AccessTokenGuard } from './access-token.guard.js';
+import { GoogleAuthController } from './google.auth.controller.js';
+import { GoogleAuthService } from './google.auth.service.js';
+import { GoogleIdentityService } from './google.identity.service.js';
+import { OAuth2Client } from 'google-auth-library';
 
 @Module({
     imports: [
@@ -19,8 +23,12 @@ import { AccessTokenGuard } from './access-token.guard.js';
             useFactory: createJwtOptions,
         }),
     ],
-    controllers: [AuthController],
-    providers: [AuthService, AuthRepository, AuthTokensService, AccessTokenGuard],
+    controllers: [AuthController, GoogleAuthController],
+    providers: [
+        AuthService, AuthRepository, AuthTokensService, AccessTokenGuard,
+        GoogleAuthService, GoogleIdentityService,
+        { provide: OAuth2Client, useFactory: () => new OAuth2Client() },
+    ],
     exports: [AccessTokenGuard, AuthTokensService],
 })
 export class AuthModule { }
