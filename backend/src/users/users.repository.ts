@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
-import { Prisma } from '../generated/prisma/client.js';
+import { isPrismaError, PRISMA_ERROR_CODES } from '../database/prisma-errors.js';
 
 export class UsernameTakenError extends Error { }
 export class UsernameAssignmentRejectedError extends Error { }
@@ -18,10 +18,8 @@ export class UsersRepository {
                 select: { id: true, fullName: true, email: true, username: true },
             });
         } catch (error) {
-            if (error instanceof Prisma.PrismaClientKnownRequestError) {
-                if (error.code === 'P2002') throw new UsernameTakenError();
-                if (error.code === 'P2025') throw new UsernameAssignmentRejectedError();
-            }
+            if (isPrismaError(error, PRISMA_ERROR_CODES.UNIQUE_CONSTRAINT)) throw new UsernameTakenError();
+            if (isPrismaError(error, PRISMA_ERROR_CODES.RECORD_NOT_FOUND)) throw new UsernameAssignmentRejectedError();
             throw error;
         }
     }

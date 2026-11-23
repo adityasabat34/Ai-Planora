@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma, SignInMethod } from '../generated/prisma/client.js';
+import { isPrismaError, PRISMA_ERROR_CODES } from '../database/prisma-errors.js';
 import type { CreateGoogleUserInput, CreatePasswordUserInput, CreateSessionInput } from './auth.types.js';
 
 
@@ -30,10 +31,7 @@ export class AuthRepository {
                 },
             });
         } catch (error) {
-            if (
-                error instanceof Prisma.PrismaClientKnownRequestError &&
-                error.code === 'P2002'
-            ) {
+            if (isPrismaError(error, PRISMA_ERROR_CODES.UNIQUE_CONSTRAINT)) {
                 throw new DuplicateAccountError('Email is already in use');
             }
 
