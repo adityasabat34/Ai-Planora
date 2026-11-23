@@ -67,7 +67,7 @@ describe('Google sign-in', () => {
     vi.resetAllMocks();
     repository.findUserByGoogleSub.mockResolvedValue(null);
     repository.findUserByEmail.mockResolvedValue(null);
-    repository.createGoogleUser.mockResolvedValue(user);
+    repository.createGoogleUser.mockResolvedValue({ ...user, username: null });
     repository.createSession.mockImplementation(async input => ({ id: 'session', expiresAt: input.expiresAt }));
     const challenge = await request(app.getHttpServer()).get('/auth/google/nonce').expect(200);
     nonce = challenge.body.nonce;
@@ -78,7 +78,7 @@ describe('Google sign-in', () => {
 
   afterAll(async () => { await app?.close(); });
 
-  it('issues a browser-bound challenge and defers account creation until username selection', async () => {
+  it('issues a browser-bound challenge before Google registration', async () => {
     const response = await request(app.getHttpServer())
       .post('/auth/google/login').set('Cookie', nonceCookie)
       .send({ idToken: 'google-credential' }).expect(200);
@@ -96,12 +96,12 @@ describe('Google sign-in', () => {
     expect(repository.createSession).not.toHaveBeenCalled();
   });
 
-  it('creates a Google account with normalized username and a normal Planora session', async () => {
+  it('creates a Google account without a username and a normal Planora session', async () => {
     const cookie = await beginSignup();
     const response = await request(app.getHttpServer()).post('/auth/google/register')
-      .set('Cookie', cookie).send({ fullName: ' Google User ', username: ' GOOGLE_USER ' }).expect(200);
-    expect(repository.createGoogleUser).toHaveBeenCalledWith({ ...profile, username: user.username });
-    expect(response.body).toEqual({ ...user, token: expect.any(String) });
+      .set('Cookie', cookie).send({ fullName: ' Google User ' }).expect(200);
+    expect(repository.createGoogleUser).toHaveBeenCalledWith(profile);
+    expect(response.body).toEqual({ ...user, username: null, onboardingRequired: true, token: expect.any(String) });
     const claims = await jwt.verifyAsync<{ sub: string }>(response.body.token);
     expect(claims.sub).toBe(user.id);
     expect(repository.createSession).toHaveBeenCalledOnce();
@@ -119,6 +119,17 @@ describe('Google sign-in', () => {
     expect(repository.findUserByEmail).not.toHaveBeenCalled();
     expect(repository.createGoogleUser).not.toHaveBeenCalled();
     expect(response.body.id).toBe(user.id);
+    expect(response.body.onboardingRequired).toBe(false);
+  });
+
+  it('lets a returning Google user resume unfinished username selection', async () => {
+    repository.findUserByGoogleSub.mockResolvedValue({ ...user, username: null });
+    const response = await request(app.getHttpServer()).post('/auth/google/login')
+      .set('Cookie', nonceCookie).send({ idToken: 'google-credential' }).expect(200);
+    expect(response.body.username).toBeNull();
+    expect(response.body.onboardingRequired).toBe(true);
+    expect(repository.createGoogleUser).not.toHaveBeenCalled();
+    expect(repository.createSession).toHaveBeenCalledOnce();
   });
 
   it('rejects a password-account email without linking the account', async () => {
@@ -151,19 +162,19 @@ describe('Google sign-in', () => {
       if (scenario === 'nonce token') cookie = nonceCookie.replace('google_nonce=', 'google_signup=');
       const pending = request(app.getHttpServer()).post('/auth/google/register');
       if (cookie) pending.set('Cookie', cookie);
-      await pending.send({ fullName: user.fullName, username: user.username }).expect(401);
+      await pending.send({ fullName: user.fullName }).expect(401);
       expect(repository.createGoogleUser).not.toHaveBeenCalled();
     },
   );
 
-  it('keeps signup proof available when a username conflict requires retry', async () => {
+  it('keeps signup proof available when account creation fails', async () => {
     const cookie = await beginSignup();
-    repository.createGoogleUser.mockRejectedValueOnce(new DuplicateAccountError('Email or username is already in use'));
+    repository.createGoogleUser.mockRejectedValueOnce(new DuplicateAccountError('Email is already in use'));
     const response = await request(app.getHttpServer()).post('/auth/google/register')
-      .set('Cookie', cookie).send({ fullName: user.fullName, username: 'taken' }).expect(409);
+      .set('Cookie', cookie).send({ fullName: user.fullName }).expect(409);
     expect(response.headers['set-cookie']).toBeUndefined();
     await request(app.getHttpServer()).post('/auth/google/register')
-      .set('Cookie', cookie).send({ fullName: user.fullName, username: user.username }).expect(200);
+      .set('Cookie', cookie).send({ fullName: user.fullName }).expect(200);
   });
 
   it('recovers when another request created the same Google account concurrently', async () => {
@@ -171,24 +182,31 @@ describe('Google sign-in', () => {
     repository.findUserByGoogleSub.mockResolvedValueOnce(null).mockResolvedValueOnce(user);
     repository.createGoogleUser.mockRejectedValueOnce(new DuplicateAccountError('duplicate'));
     await request(app.getHttpServer()).post('/auth/google/register')
-      .set('Cookie', cookie).send({ fullName: user.fullName, username: user.username }).expect(200);
+      .set('Cookie', cookie).send({ fullName: user.fullName }).expect(200);
   });
 
   it('retries session creation after an account was created successfully', async () => {
     const cookie = await beginSignup();
     repository.createSession.mockRejectedValueOnce(new Error('database unavailable'));
     await request(app.getHttpServer()).post('/auth/google/register')
-      .set('Cookie', cookie).send({ fullName: user.fullName, username: user.username }).expect(500);
+      .set('Cookie', cookie).send({ fullName: user.fullName }).expect(500);
     repository.findUserByGoogleSub.mockResolvedValue(user);
     await request(app.getHttpServer()).post('/auth/google/register')
-      .set('Cookie', cookie).send({ fullName: user.fullName, username: user.username }).expect(200);
+      .set('Cookie', cookie).send({ fullName: user.fullName }).expect(200);
     expect(repository.createGoogleUser).toHaveBeenCalledOnce();
   });
 
   it('rejects client-supplied identity fields in signup', async () => {
     const cookie = await beginSignup();
     await request(app.getHttpServer()).post('/auth/google/register')
-      .set('Cookie', cookie).send({ fullName: user.fullName, username: user.username, email: 'attacker@example.com' }).expect(400);
+      .set('Cookie', cookie).send({ fullName: user.fullName, email: 'attacker@example.com' }).expect(400);
+    expect(repository.createGoogleUser).not.toHaveBeenCalled();
+  });
+
+  it('requires Google registration and username selection to be separate requests', async () => {
+    const cookie = await beginSignup();
+    await request(app.getHttpServer()).post('/auth/google/register')
+      .set('Cookie', cookie).send({ fullName: user.fullName, username: user.username }).expect(400);
     expect(repository.createGoogleUser).not.toHaveBeenCalled();
   });
 

@@ -1,8 +1,9 @@
-import { Controller, Get, Header, Query, Req, UseGuards, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Get, Header, Put, Query, Req, UseGuards, ValidationPipe } from '@nestjs/common';
 import { AccessTokenGuard } from '../auth/access-token.guard.js';
 import type { AuthenticatedRequest } from '../auth/auth.types.js';
 import { UsersService } from './users.service.js';
 import { UsernameAvailabilityQueryDto } from './dto/username-availability-query.dto.js';
+import { SetUsernameDto } from './dto/set-username.dto.js';
 
 @Controller('users')
 export class UsersController {
@@ -18,6 +19,20 @@ export class UsersController {
         })) query: UsernameAvailabilityQueryDto,
     ) {
         return this.usersService.getUsernameAvailability(query.username);
+    }
+
+    @Put('me/username')
+    @UseGuards(AccessTokenGuard)
+    @Header('Cache-Control', 'no-store')
+    setUsername(
+        @Req() request: AuthenticatedRequest,
+        @Body(new ValidationPipe({
+            transform: true,
+            whitelist: true,
+            forbidNonWhitelisted: true,
+        })) body: SetUsernameDto,
+    ) {
+        return this.usersService.setUsername(request.user.id, body.username);
     }
 
     @Get('me')

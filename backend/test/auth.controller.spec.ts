@@ -6,7 +6,7 @@ import bcrypt from 'bcrypt';
 import { createHash } from 'node:crypto';
 import request from 'supertest';
 import { AuthController } from '../src/auth/auth.controller.js';
-import { AuthRepository } from '../src/auth/auth.repository.js';
+import { AuthRepository, DuplicateAccountError } from '../src/auth/auth.repository.js';
 import { AuthService } from '../src/auth/auth.service.js';
 import { AuthTokensService } from '../src/auth/auth.tokens.service.js';
 import { createJwtOptions } from '../src/auth/config/jwt.config.js';
@@ -25,6 +25,7 @@ describe('Auth endpoints', () => {
     username: 'login_test',
   };
   const repository = {
+    createPasswordUser: vi.fn<AuthRepository['createPasswordUser']>(),
     findUserByEmail: vi.fn<AuthRepository['findUserByEmail']>(),
     createSession: vi.fn<AuthRepository['createSession']>(),
     findSessionByRefreshTokenHash: vi.fn<AuthRepository['findSessionByRefreshTokenHash']>(),
@@ -76,7 +77,7 @@ describe('Auth endpoints', () => {
       .send({ email: ' LOGIN@EXAMPLE.COM ', password })
       .expect(200);
 
-    expect(response.body).toEqual({ ...publicUser, token: expect.any(String) });
+    expect(response.body).toEqual({ ...publicUser, onboardingRequired: false, token: expect.any(String) });
     expect(response.headers['cache-control']).toBe('no-store');
     expect(repository.findUserByEmail).toHaveBeenCalledWith(publicUser.email);
 
@@ -106,6 +107,68 @@ describe('Auth endpoints', () => {
     const ttl = 7 * 24 * 60 * 60 * 1000;
     expect(session.expiresAt.getTime()).toBeGreaterThanOrEqual(startedAt + ttl);
     expect(session.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + ttl);
+  });
+
+  it('registers without a username, hashes the password, and creates a login session', async () => {
+    repository.createPasswordUser.mockResolvedValue({ ...publicUser, username: null });
+    const response = await request(app.getHttpServer()).post('/auth/register')
+      .send({ fullName: ' Login Test ', email: ' LOGIN@EXAMPLE.COM ', password })
+      .expect(201);
+
+    expect(response.body).toEqual({
+      ...publicUser, username: null, onboardingRequired: true, token: expect.any(String),
+    });
+    const input = repository.createPasswordUser.mock.calls[0]![0];
+    expect(input).toEqual({
+      fullName: publicUser.fullName, email: publicUser.email, passwordHash: expect.any(String),
+    });
+    expect(await bcrypt.compare(password, input.passwordHash)).toBe(true);
+    expect(repository.createSession).toHaveBeenCalledOnce();
+    expect(response.headers['set-cookie']).toHaveLength(2);
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
+
+  it('lets a user log back in and resume unfinished username selection', async () => {
+    repository.findUserByEmail.mockResolvedValue({
+      ...publicUser, username: null, signInMethod: SignInMethod.PASSWORD, passwordHash,
+    });
+    const response = await request(app.getHttpServer()).post('/auth/login')
+      .send({ email: publicUser.email, password }).expect(200);
+    expect(response.body.username).toBeNull();
+    expect(response.body.onboardingRequired).toBe(true);
+    expect(response.headers['set-cookie']).toHaveLength(2);
+  });
+
+  it.each([
+    { fullName: publicUser.fullName, email: publicUser.email, password, username: 'old_flow' },
+    { fullName: publicUser.fullName, email: publicUser.email, password, onboardingRequired: false },
+    { fullName: publicUser.fullName, email: 'invalid', password },
+    { fullName: publicUser.fullName, email: publicUser.email },
+    { fullName: publicUser.fullName, email: publicUser.email, password: 'é'.repeat(37) },
+  ])('rejects invalid registration input (%j)', async body => {
+    await request(app.getHttpServer()).post('/auth/register').send(body).expect(400);
+    expect(repository.createPasswordUser).not.toHaveBeenCalled();
+    expect(repository.createSession).not.toHaveBeenCalled();
+  });
+
+  it.each([SignInMethod.PASSWORD, SignInMethod.GOOGLE])('handles a duplicate registration email (%s)', async method => {
+    repository.createPasswordUser.mockRejectedValue(new DuplicateAccountError('Email is already in use'));
+    repository.findUserByEmail.mockResolvedValue({ ...publicUser, passwordHash, signInMethod: method });
+    const response = await request(app.getHttpServer()).post('/auth/register')
+      .send({ fullName: publicUser.fullName, email: publicUser.email, password }).expect(409);
+    expect(response.body.message).toBe(method === SignInMethod.GOOGLE
+      ? 'This email uses Google sign-in. Continue with Google'
+      : 'Email is already in use');
+    expect(repository.createSession).not.toHaveBeenCalled();
+    expect(response.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('sends no cookies when registration session creation fails', async () => {
+    repository.createPasswordUser.mockResolvedValue({ ...publicUser, username: null });
+    repository.createSession.mockRejectedValue(new Error('database unavailable'));
+    const response = await request(app.getHttpServer()).post('/auth/register')
+      .send({ fullName: publicUser.fullName, email: publicUser.email, password }).expect(500);
+    expect(response.headers['set-cookie']).toBeUndefined();
   });
 
   it.each([

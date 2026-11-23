@@ -7,7 +7,6 @@ export type AuthenticatedRequest = Request & {
 export type CreatePasswordUserInput = {
     fullName: string;
     email: string;
-    username: string;
     passwordHash: string;
 }
 
@@ -28,7 +27,7 @@ export type PublicUser = {
     id: string;
     fullName: string;
     email: string;
-    username: string;
+    username: string | null;
 };
 
 export type AuthSession = {
@@ -44,4 +43,4 @@ export type GoogleIdentity = {
     fullName: string;
 };
 
-export type CreateGoogleUserInput = GoogleIdentity & { username: string };
+export type CreateGoogleUserInput = GoogleIdentity;

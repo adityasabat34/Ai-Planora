@@ -5,6 +5,8 @@ import { AuthService } from './auth.service.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { AUTH_COOKIE_NAMES, createAuthCookieClearOptions, createAuthCookieOptions } from './auth.cookies.js';
+import type { AuthSession } from './auth.types.js';
+import { toUserProfile } from '../users/user-profile.js';
 
 @Controller("auth")
 export class AuthController {
@@ -14,15 +16,18 @@ export class AuthController {
     ) { }
 
     @Post("register")
-    register(
+    @Header('Cache-Control', 'no-store')
+    async register(
         @Body(new ValidationPipe({
             transform: true,
             whitelist: true,
             forbidNonWhitelisted: true,
         }))
-        body: RegisterDto
+        body: RegisterDto,
+        @Res({ passthrough: true }) response: Response,
     ) {
-        return this.authService.register(body);
+        const session = await this.authService.register(body);
+        return this.sendSession(response, session);
     }
 
     @Post('logout')
@@ -70,9 +75,14 @@ export class AuthController {
         body: LoginDto,
         @Res({ passthrough: true }) response: Response,
     ) {
-        const { user, accessToken, refreshToken, refreshExpiresAt } =
-            await this.authService.login(body);
+        const session = await this.authService.login(body);
+        return this.sendSession(response, session);
+    }
 
+    private sendSession(
+        response: Response,
+        { user, accessToken, refreshToken, refreshExpiresAt }: AuthSession,
+    ) {
         const cookieOptions = createAuthCookieOptions(
             this.config.get<string>('NODE_ENV') === 'production',
             refreshExpiresAt,
@@ -82,7 +92,7 @@ export class AuthController {
         response.cookie(AUTH_COOKIE_NAMES.refreshToken, refreshToken, cookieOptions.refreshToken);
 
         return {
-            ...user,
+            ...toUserProfile(user),
             token: accessToken,
         };
     }

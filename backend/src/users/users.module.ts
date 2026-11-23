@@ -4,10 +4,12 @@ import { DatabaseModule } from '../database/database.module.js';
 import { UsersController } from './users.controller.js';
 import { UsersRepository } from './users.repository.js';
 import { UsersService } from './users.service.js';
+import { UsernameRequiredGuard } from './username-required.guard.js';
 
 @Module({
     imports: [AuthModule, DatabaseModule],
     controllers: [UsersController],
-    providers: [UsersService, UsersRepository],
+    providers: [UsersService, UsersRepository, UsernameRequiredGuard],
+    exports: [UsersService, UsernameRequiredGuard],
 })
 export class UsersModule { }

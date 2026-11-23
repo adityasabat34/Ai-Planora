@@ -6,6 +6,7 @@ import type { AuthSession } from './auth.types.js';
 import { GoogleLoginDto } from './dto/google-login.dto.js';
 import { GoogleRegisterDto } from './dto/google-register.dto.js';
 import { GoogleAuthService } from './google.auth.service.js';
+import { toUserProfile } from '../users/user-profile.js';
 
 @Controller('auth/google')
 export class GoogleAuthController {
@@ -69,6 +70,6 @@ export class GoogleAuthController {
         const options = createAuthCookieOptions(this.isProduction, refreshExpiresAt);
         response.cookie(AUTH_COOKIE_NAMES.accessToken, accessToken, options.accessToken);
         response.cookie(AUTH_COOKIE_NAMES.refreshToken, refreshToken, options.refreshToken);
-        return { ...user, token: accessToken };
+        return { ...toUserProfile(user), token: accessToken };
     }
 }

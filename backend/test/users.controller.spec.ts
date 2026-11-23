@@ -52,7 +52,7 @@ describe('GET /users/me', () => {
       .expect(200);
 
     expect(repository.findPublicUserById).toHaveBeenCalledWith(user.id);
-    expect(response.body).toEqual(user);
+    expect(response.body).toEqual({ ...user, onboardingRequired: false });
     expect(response.headers['cache-control']).toBe('no-store');
   });
 

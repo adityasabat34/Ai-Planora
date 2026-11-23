@@ -21,18 +21,18 @@ export class AuthService {
         private readonly authTokensService: AuthTokensService,
     ) { }
 
-    async register({ fullName, email, username, password }: RegisterDto) {
+    async register({ fullName, email, password }: RegisterDto) {
         if (Buffer.byteLength(password, 'utf8') > 72) {
             throw new BadRequestException('Password must be at most 72 UTF-8 bytes');
         }
 
         const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
 
+        let user: PublicUser;
         try {
-            return await this.authRepository.createPasswordUser({
+            user = await this.authRepository.createPasswordUser({
                 fullName,
                 email,
-                username,
                 passwordHash,
             });
         } catch (error) {
@@ -46,6 +46,8 @@ export class AuthService {
 
             throw error;
         }
+
+        return this.createSessionForUser(user);
     }
 
     async login(input: LoginDto) {

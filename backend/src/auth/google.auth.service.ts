@@ -65,7 +65,6 @@ export class GoogleAuthService {
                     googleSub: identity.googleSub,
                     email: identity.email,
                     fullName: input.fullName,
-                    username: input.username,
                 });
             } catch (error) {
                 if (!(error instanceof DuplicateAccountError)) throw error;

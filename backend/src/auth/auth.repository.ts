@@ -34,7 +34,7 @@ export class AuthRepository {
                 error instanceof Prisma.PrismaClientKnownRequestError &&
                 error.code === 'P2002'
             ) {
-                throw new DuplicateAccountError('Email or username is already in use');
+                throw new DuplicateAccountError('Email is already in use');
             }
 
             throw error;
