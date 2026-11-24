@@ -5,10 +5,11 @@ import { UsersModule } from '../users/users.module.js';
 import { EventsController } from './events.controller.js';
 import { EventsRepository } from './events.repository.js';
 import { EventsService } from './events.service.js';
+import { EventsCleanupService } from './events-cleanup.service.js';
 
 @Module({
   imports: [AuthModule, UsersModule, DatabaseModule],
   controllers: [EventsController],
-  providers: [EventsService, EventsRepository],
+  providers: [EventsService, EventsRepository, EventsCleanupService],
 })
 export class EventsModule { }

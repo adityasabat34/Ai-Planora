@@ -9,7 +9,7 @@ import { Prisma } from '../src/generated/prisma/client.js';
 import type { PublicUser } from '../src/auth/auth.types.js';
 import type { CreateEventInput } from '../src/events/events.types.js';
 
-describe('POST /events', () => {
+describe('Events endpoints', () => {
   let app: INestApplication;
   let cookie: string;
   const user: PublicUser = {
@@ -21,10 +21,16 @@ describe('POST /events', () => {
   };
   const findUnique = vi.fn<() => Promise<PublicUser | null>>();
   const create = vi.fn<(args: { data: CreateEventInput }) => Promise<unknown>>();
+  const findEvent = vi.fn<(args: { where: { id: string; ownerId: string } }) => Promise<unknown>>();
+  const savedEvent = {
+    id: '9877aa6d-9c1e-4320-9db6-83cb979833a0', ownerId: user.id, ...body,
+    location: null, privateNote: 'Only the owner can read this',
+    createdAt: '2026-11-23T00:00:00.000Z', updatedAt: '2026-11-23T00:00:00.000Z',
+  };
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({ imports: [EventsModule] })
-      .overrideProvider(PrismaService).useValue({ user: { findUnique }, event: { create } })
+      .overrideProvider(PrismaService).useValue({ user: { findUnique }, event: { create, findUnique: findEvent } })
       .overrideProvider(ConfigService).useValue(new ConfigService({
         JWT_ACCESS_SECRET: 'events-secret-used-only-in-tests', NODE_ENV: 'test',
       })).compile();
@@ -36,6 +42,7 @@ describe('POST /events', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     findUnique.mockResolvedValue(user);
+    findEvent.mockResolvedValue(savedEvent);
     create.mockImplementation(async ({ data }) => ({
       id: '9877aa6d-9c1e-4320-9db6-83cb979833a0', ...data,
       location: data.location ?? null, privateNote: data.privateNote ?? null,
@@ -44,6 +51,80 @@ describe('POST /events', () => {
   });
 
   afterAll(async () => { await app?.close(); });
+
+  describe('GET /events/:id', () => {
+    it('returns the owned event including its private note', async () => {
+      const response = await request(app.getHttpServer()).get(`/events/${savedEvent.id}`)
+        .set('Cookie', cookie).expect(200);
+      expect(response.body).toEqual(savedEvent);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(findEvent).toHaveBeenCalledExactlyOnceWith({
+        where: { id: savedEvent.id, ownerId: user.id, deletedAt: null },
+        select: {
+          id: true, ownerId: true, title: true, startTime: true, endTime: true,
+          location: true, privateNote: true, createdAt: true, updatedAt: true,
+        },
+      });
+    });
+
+    it('returns 404 when no owned event matches', async () => {
+      findEvent.mockResolvedValue(null);
+      const response = await request(app.getHttpServer()).get(`/events/${savedEvent.id}`)
+        .set('Cookie', cookie).expect(404);
+      expect(response.body.message).toBe('Event not found');
+      expect(response.body).not.toHaveProperty('privateNote');
+    });
+
+    it('uses the requesting account to prevent another user from reading the event', async () => {
+      const otherUser = { ...user, id: '97356276-fcad-4ca2-bd41-091ce2344ebe' };
+      findUnique.mockResolvedValue(otherUser);
+      findEvent.mockImplementation(async ({ where }) =>
+        where.id === savedEvent.id && where.ownerId === savedEvent.ownerId ? savedEvent : null,
+      );
+      const jwt = app.get(JwtService);
+      const otherCookie = `access_token=${await jwt.signAsync({ sub: otherUser.id })}`;
+      const response = await request(app.getHttpServer()).get(`/events/${savedEvent.id}`)
+        .set('Cookie', otherCookie).expect(404);
+      expect(findEvent).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: savedEvent.id, ownerId: otherUser.id, deletedAt: null },
+      }));
+      expect(response.body.message).toBe('Event not found');
+      expect(response.body).not.toHaveProperty('privateNote');
+    });
+
+    it.each(['invalid', '123', '9877aa6d-9c1e-4320-9db6-83cb979833aX'])(
+      'rejects a malformed ID (%s) before event lookup', async id => {
+        await request(app.getHttpServer()).get(`/events/${id}`).set('Cookie', cookie).expect(400);
+        expect(findEvent).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([undefined, 'access_token=invalid'])('requires authentication (%s)', async authCookie => {
+      const pending = request(app.getHttpServer()).get(`/events/${savedEvent.id}`);
+      if (authCookie) pending.set('Cookie', authCookie);
+      await pending.expect(401);
+      expect(findEvent).not.toHaveBeenCalled();
+    });
+
+    it('requires completed username setup', async () => {
+      findUnique.mockResolvedValue({ ...user, username: null });
+      await request(app.getHttpServer()).get(`/events/${savedEvent.id}`).set('Cookie', cookie).expect(403);
+      expect(findEvent).not.toHaveBeenCalled();
+    });
+
+    it('rejects a deleted account', async () => {
+      findUnique.mockResolvedValue(null);
+      await request(app.getHttpServer()).get(`/events/${savedEvent.id}`).set('Cookie', cookie).expect(401);
+      expect(findEvent).not.toHaveBeenCalled();
+    });
+
+    it('preserves database failures as server errors', async () => {
+      findEvent.mockRejectedValue(new Error('database unavailable'));
+      const response = await request(app.getHttpServer()).get(`/events/${savedEvent.id}`)
+        .set('Cookie', cookie).expect(500);
+      expect(response.body.message).toBe('Internal server error');
+    });
+  });
 
   it('persists an event for the authenticated owner and returns 201', async () => {
     const response = await request(app.getHttpServer()).post('/events').set('Cookie', cookie)
