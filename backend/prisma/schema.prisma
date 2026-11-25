@@ -12,6 +12,13 @@ enum SignInMethod {
   GOOGLE
 }
 
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
 model User {
   id           String       @id @default(uuid()) @db.Uuid
   fullName     String
@@ -21,8 +28,11 @@ model User {
   passwordHash String?
   googleSub    String?      @unique
   createdAt    DateTime     @default(now()) @db.Timestamptz
-  sessions     Session[]
-  events       Event[]
+
+  sessions            Session[]
+  events              Event[]
+  receivedInvitations EventInvitation[]
+  eventMemberships    EventMember[]
 }
 
 model Event {
@@ -39,9 +49,44 @@ model Event {
   ownerId String @db.Uuid
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
+  invitations EventInvitation[]
+  members     EventMember[]
+
   @@index([ownerId, startTime])
   @@index([ownerId, deletedAt])
   @@index([deletedAt])
+}
+
+model EventInvitation {
+  id             String           @id @default(uuid()) @db.Uuid
+  eventId        String           @db.Uuid
+  /// Store the trimmed, lowercase address used for account lookup.
+  inviteeEmail   String           @db.VarChar(254)
+  inviteeUserId  String?          @db.Uuid
+  status         InvitationStatus @default(PENDING)
+  createdAt      DateTime         @default(now()) @db.Timestamptz
+  expiresAt      DateTime         @db.Timestamptz
+  respondedAt    DateTime?        @db.Timestamptz
+  emailTokenHash String?          @unique @db.VarChar(64)
+
+  event   Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  invitee User? @relation(fields: [inviteeUserId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, inviteeEmail])
+  @@index([inviteeUserId, createdAt])
+}
+
+model EventMember {
+  eventId     String   @db.Uuid
+  userId      String   @db.Uuid
+  joinedAt    DateTime @default(now()) @db.Timestamptz
+  privateNote String?
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, userId])
+  @@index([userId, eventId])
 }
 
 model Session {

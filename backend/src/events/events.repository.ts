@@ -3,6 +3,7 @@ import { PrismaService } from '../database/prisma.service.js';
 import { isPrismaError, PRISMA_ERROR_CODES } from '../database/prisma-errors.js';
 import type { CreateEventInput, EventSchedule, UpdateEventInput } from './events.types.js';
 import { EVENT_CLEANUP_BATCH_SIZE } from './events.constants.js';
+import { INITIAL_INVITATION_LIFETIME_MS } from '../invitations/invitation-expiry.js';
 
 @Injectable()
 export class EventsRepository {
@@ -65,7 +66,7 @@ export class EventsRepository {
 
   async updateOwned(id: string, ownerId: string, data: UpdateEventInput, expectedSchedule?: EventSchedule) {
     try {
-      return await this.prisma.event.update({
+      const updateEvent = this.prisma.event.update({
         // Compare the schedule and write atomically to preserve a valid range under concurrent edits.
         where: { id, ownerId, deletedAt: null, ...expectedSchedule },
         data,
@@ -74,6 +75,20 @@ export class EventsRepository {
           location: true, privateNote: true, createdAt: true, updatedAt: true,
         },
       });
+      const newStart = data.startTime;
+      if (!newStart || newStart.getTime() === expectedSchedule?.startTime.getTime()) return await updateEvent;
+
+      // The event update locks the row first, exactly as invitation creation does.
+      // Update all pending deadlines in one statement, preserving a deadline that already elapsed.
+      const startInstant = newStart.toISOString();
+      const [event] = await this.prisma.$transaction([updateEvent, this.prisma.$executeRaw`
+        UPDATE "EventInvitation"
+        SET "expiresAt" = CASE WHEN "expiresAt" <= statement_timestamp() THEN "expiresAt"
+            ELSE LEAST("createdAt" + ${INITIAL_INVITATION_LIFETIME_MS} * INTERVAL '1 millisecond', ${startInstant}::timestamptz) END,
+            "status" = CASE WHEN LEAST("expiresAt", ${startInstant}::timestamptz) <= statement_timestamp()
+                THEN 'EXPIRED'::"InvitationStatus" ELSE "status" END
+        WHERE "eventId" = ${id}::uuid AND "status" = 'PENDING'`]);
+      return event;
     } catch (error) {
       if (isPrismaError(error, PRISMA_ERROR_CODES.RECORD_NOT_FOUND)) return null;
       throw error;

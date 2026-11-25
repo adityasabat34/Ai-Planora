@@ -24,6 +24,7 @@ describe('PATCH /events/:id', () => {
   const findUser = vi.fn<() => Promise<PublicUser | null>>();
   const findEvent = vi.fn<() => Promise<typeof event | null>>();
   const update = vi.fn<(args: Prisma.EventUpdateArgs) => Promise<unknown>>();
+  const updateDeadlines = vi.fn<() => Promise<number>>();
 
   function recordNotFound() {
     return new Prisma.PrismaClientKnownRequestError('No matching event', { code: 'P2025', clientVersion: '7.10.1' });
@@ -31,7 +32,10 @@ describe('PATCH /events/:id', () => {
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({ imports: [EventsModule] })
-      .overrideProvider(PrismaService).useValue({ user: { findUnique: findUser }, event: { findUnique: findEvent, update } })
+      .overrideProvider(PrismaService).useValue({
+        user: { findUnique: findUser }, event: { findUnique: findEvent, update },
+        $executeRaw: updateDeadlines, $transaction: (operations: Promise<unknown>[]) => Promise.all(operations),
+      })
       .overrideProvider(ConfigService).useValue(new ConfigService({
         JWT_ACCESS_SECRET: 'event-update-secret-used-only-in-tests', NODE_ENV: 'test',
       })).compile();
@@ -45,6 +49,7 @@ describe('PATCH /events/:id', () => {
     findUser.mockResolvedValue(user);
     findEvent.mockResolvedValue(event);
     update.mockImplementation(async ({ data }) => ({ ...event, ...data }));
+    updateDeadlines.mockResolvedValue(0);
   });
 
   afterAll(async () => { await app?.close(); });
@@ -55,6 +60,7 @@ describe('PATCH /events/:id', () => {
     expect(response.body).toMatchObject({ title: 'Renamed', location: 'Home', privateNote: 'Private' });
     expect(response.body.startTime).toBe(event.startTime.toISOString());
     expect(response.headers['cache-control']).toBe('no-store');
+    expect(updateDeadlines).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalledExactlyOnceWith({
       where: { id: event.id, ownerId: user.id, deletedAt: null }, data: { title: 'Renamed' },
       select: {
@@ -86,6 +92,7 @@ describe('PATCH /events/:id', () => {
       where: { id: event.id, ownerId: user.id, deletedAt: null, startTime: event.startTime, endTime: event.endTime },
       data: { startTime: new Date('2026-12-01T09:30:00Z') },
     }));
+    expect(updateDeadlines).toHaveBeenCalledOnce();
   });
 
   it('allows moving both timestamps and spanning multiple days', async () => {

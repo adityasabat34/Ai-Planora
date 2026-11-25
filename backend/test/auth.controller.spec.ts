@@ -142,6 +142,7 @@ describe('Auth endpoints', () => {
   it.each([
     { fullName: publicUser.fullName, email: publicUser.email, password, username: 'old_flow' },
     { fullName: publicUser.fullName, email: publicUser.email, password, onboardingRequired: false },
+    { fullName: publicUser.fullName, password },
     { fullName: publicUser.fullName, email: 'invalid', password },
     { fullName: publicUser.fullName, email: publicUser.email },
     { fullName: publicUser.fullName, email: publicUser.email, password: 'é'.repeat(37) },
@@ -172,6 +173,7 @@ describe('Auth endpoints', () => {
   });
 
   it.each([
+    { password },
     { email: 'invalid', password },
     { email: publicUser.email, password: '' },
     { email: publicUser.email, password: 12345 },
