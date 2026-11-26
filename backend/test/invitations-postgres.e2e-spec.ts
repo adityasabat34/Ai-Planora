@@ -12,14 +12,17 @@ import { InvitationsModule } from '../src/invitations/invitations.module.js';
 
 const testDatabaseUrl = process.env.PLANORA_TEST_DATABASE_URL;
 
-describe.runIf(testDatabaseUrl)('Organizer invitations with PostgreSQL', () => {
+describe.runIf(testDatabaseUrl)('Event invitations with PostgreSQL', () => {
   const ownerId = randomUUID();
   const guestId = randomUUID();
   const guestEmail = `${guestId}@example.test`;
+  const inboxUserId = randomUUID();
+  const inboxEmail = `${inboxUserId}@example.test`;
   let db: PrismaClient;
   let app: INestApplication;
   let ownerCookie: string;
   let guestCookie: string;
+  let inboxCookie: string;
 
   function hoursFromNow(hours: number) {
     return new Date(Date.now() + hours * 60 * 60 * 1000);
@@ -58,17 +61,18 @@ describe.runIf(testDatabaseUrl)('Organizer invitations with PostgreSQL', () => {
       .compile();
     app = module.createNestApplication({ logger: false });
     await app.init();
-    await db.user.createMany({ data: [ownerId, guestId].map(id => ({
+    await db.user.createMany({ data: [ownerId, guestId, inboxUserId].map(id => ({
       id, fullName: 'Invitation test user', email: `${id}@example.test`, username: id.replaceAll('-', '').slice(0, 30), signInMethod: 'PASSWORD',
     })) });
     const jwt = module.get(JwtService);
     ownerCookie = `access_token=${await jwt.signAsync({ sub: ownerId })}`;
     guestCookie = `access_token=${await jwt.signAsync({ sub: guestId })}`;
+    inboxCookie = `access_token=${await jwt.signAsync({ sub: inboxUserId })}`;
   });
 
   afterAll(async () => {
     try {
-      await db?.user.deleteMany({ where: { id: { in: [ownerId, guestId] } } });
+      await db?.user.deleteMany({ where: { id: { in: [ownerId, guestId, inboxUserId] } } });
     } finally {
       await app?.close();
       await db?.$disconnect();
@@ -104,6 +108,10 @@ describe.runIf(testDatabaseUrl)('Organizer invitations with PostgreSQL', () => {
     expect(stored.expiresAt).toEqual(start);
     const read = await request(app.getHttpServer()).get(created.headers.location as string).set('Cookie', ownerCookie).expect(200);
     expect(read.body).toEqual(created.body);
+    const inbox = await request(app.getHttpServer()).get('/invitations').set('Cookie', guestCookie).expect(200);
+    expect(inbox.body.items).toContainEqual({
+      id: stored.id, status: 'PENDING', createdAt: stored.createdAt.toISOString(), expiresAt: start.toISOString(),
+    });
   });
 
   it('serializes an invitation with a concurrent reschedule and never reopens an expired invite', async () => {
@@ -122,5 +130,62 @@ describe.runIf(testDatabaseUrl)('Organizer invitations with PostgreSQL', () => {
     await moveStart(event.id, hoursFromNow(12));
     const replay = await invite(event.id, email).expect(200);
     expect(replay.body).toMatchObject({ id: stored.id, status: 'EXPIRED', expiresAt: elapsedStart.toISOString() });
+  });
+
+  it('pages through only this recipient’s visible invites when creation times tie', async () => {
+    const [firstEvent, secondEvent, olderEvent, trashedEvent, unclaimedEvent] = await Promise.all(
+      Array.from({ length: 5 }, () => createEvent()),
+    );
+    const [firstId, secondId] = [randomUUID(), randomUUID()].sort().reverse();
+    const olderId = randomUUID();
+    const foreignId = randomUUID();
+    const trashedId = randomUUID();
+    const unclaimedId = randomUUID();
+    const issuedAt = hoursFromNow(-2);
+    const deadline = hoursFromNow(12);
+    const earlierIssue = hoursFromNow(-4);
+    const elapsed = hoursFromNow(-1);
+    const recipient = { inviteeUserId: inboxUserId, inviteeEmail: inboxEmail, createdAt: issuedAt, expiresAt: deadline };
+    await db.$transaction(async tx => {
+      await tx.$executeRaw`SET LOCAL TIME ZONE 'UTC'`;
+      await tx.eventInvitation.createMany({ data: [
+        { ...recipient, id: firstId, eventId: firstEvent.id },
+        { ...recipient, id: secondId, eventId: secondEvent.id },
+        { ...recipient, id: olderId, eventId: olderEvent.id, createdAt: earlierIssue, expiresAt: elapsed },
+        { ...recipient, id: foreignId, eventId: firstEvent.id, inviteeUserId: guestId, inviteeEmail: guestEmail },
+        { ...recipient, id: trashedId, eventId: trashedEvent.id },
+        { ...recipient, id: unclaimedId, eventId: unclaimedEvent.id, inviteeUserId: null },
+      ] });
+    });
+    await request(app.getHttpServer()).delete(`/events/${trashedEvent.id}`).set('Cookie', ownerCookie).expect(204);
+
+    const inbox = () => request(app.getHttpServer()).get('/invitations').set('Cookie', inboxCookie);
+    const first = await inbox().query({ limit: 1 }).expect(200);
+    const pending = { status: 'PENDING', createdAt: issuedAt.toISOString(), expiresAt: deadline.toISOString() };
+    expect(first.body).toEqual({ items: [{ id: firstId, ...pending }], nextCursor: firstId });
+
+    // An invite arriving between page requests should appear on a fresh read, without shifting page two.
+    const newestEvent = await createEvent();
+    const newest = await invite(newestEvent.id, inboxEmail).expect(201);
+    const second = await inbox().query({ limit: 2, cursor: first.body.nextCursor }).expect(200);
+    expect(second.body).toEqual({
+      items: [
+        { id: secondId, ...pending },
+        { id: olderId, status: 'EXPIRED', createdAt: earlierIssue.toISOString(), expiresAt: elapsed.toISOString() },
+      ],
+      nextCursor: null,
+    });
+    const refreshed = await inbox().query({ limit: 1 }).expect(200);
+    expect(refreshed.body.items[0].id).toBe(newest.body.id);
+    const afterLast = await inbox().query({ cursor: olderId }).expect(200);
+    expect(afterLast.body).toEqual({ items: [], nextCursor: null });
+
+    for (const cursor of [foreignId, trashedId, unclaimedId, randomUUID()]) {
+      const invalid = await inbox().query({ cursor }).expect(400);
+      expect(invalid.body.message).toBe('Invalid inbox cursor');
+    }
+    const stored = await storedInvitation(olderEvent.id);
+    expect(stored.status).toBe('PENDING');
+    expect(await db.eventMember.count({ where: { userId: inboxUserId } })).toBe(0);
   });
 });

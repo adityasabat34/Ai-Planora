@@ -7,7 +7,7 @@ import { PrismaService } from '../src/database/prisma.service.js';
 import { InvitationStatus } from '../src/generated/prisma/client.js';
 import { InvitationsModule } from '../src/invitations/invitations.module.js';
 
-describe('Organizer invitations', () => {
+describe('Event invitations', () => {
   const now = new Date('2026-11-25T12:00:00Z');
   const organizer = { id: '0a61ccf4-12d8-4797-9c74-7d2f622ca51d', email: 'owner@example.com', fullName: 'Owner', username: 'owner' };
   const eventId = 'e4c6b8c5-b6cd-4719-a93e-b17013ce1056';
@@ -25,10 +25,12 @@ describe('Organizer invitations', () => {
   const findExisting = vi.fn();
   const insert = vi.fn();
   const findOne = vi.fn();
-  const tx = { $queryRaw: query, $executeRaw: vi.fn(), eventInvitation: { findUnique: findExisting, findFirst: findOne, create: insert } };
+  const findMany = vi.fn();
+  const tx = { $queryRaw: query, $executeRaw: vi.fn(), eventInvitation: { findUnique: findExisting, findFirst: findOne, findMany, create: insert } };
   const transaction = vi.fn<(work: (client: typeof tx) => Promise<unknown>) => Promise<unknown>>();
   let app: INestApplication;
   let cookie: string;
+  let recipientCookie: string;
 
   beforeAll(async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -42,6 +44,7 @@ describe('Organizer invitations', () => {
     app = module.createNestApplication({ logger: false });
     await app.init();
     cookie = `access_token=${await module.get(JwtService).signAsync({ sub: organizer.id })}`;
+    recipientCookie = `access_token=${await module.get(JwtService).signAsync({ sub: inviteeId })}`;
   });
 
   beforeEach(() => {
@@ -153,5 +156,66 @@ describe('Organizer invitations', () => {
     await request(app.getHttpServer()).get(`${collection}/invalid`).set('Cookie', cookie).expect(400);
     expect(transaction).not.toHaveBeenCalled();
     expect(findOne).not.toHaveBeenCalled();
+  });
+
+  describe('GET /invitations', () => {
+    const entry = { id: invitation.id, status: InvitationStatus.PENDING, createdAt: now, expiresAt: invitation.expiresAt };
+
+    function inbox(queryString = '') {
+      return request(app.getHttpServer()).get(`/invitations${queryString}`).set('Cookie', recipientCookie);
+    }
+
+    beforeEach(() => {
+      findUser.mockResolvedValue({ id: inviteeId, fullName: 'Riya', email: invitation.inviteeEmail, username: 'riya' });
+      findMany.mockResolvedValue([]);
+    });
+
+    afterEach(() => { vi.setSystemTime(now); });
+
+    it('uses the signed-in account, selects inbox fields, and returns an empty first page', async () => {
+      const response = await inbox().expect(200).expect('Cache-Control', 'no-store');
+      expect(response.body).toEqual({ items: [], nextCursor: null });
+      expect(findMany).toHaveBeenCalledExactlyOnceWith({
+        where: { inviteeUserId: inviteeId, event: { deletedAt: null } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 21, cursor: undefined,
+        select: { id: true, status: true, createdAt: true, expiresAt: true },
+      });
+    });
+
+    it('shows an unanswered invite as pending just before 6 PM and expired at 6 PM and 6:10 PM', async () => {
+      const cutoff = new Date('2026-11-25T18:00:00+05:30');
+      vi.setSystemTime(cutoff.getTime() - 60_000);
+      const session = `access_token=${await app.get(JwtService).signAsync({ sub: inviteeId })}`;
+      findMany.mockResolvedValue([{ ...entry, expiresAt: cutoff }]);
+      for (const [offsetMs, expectedStatus] of [[-1, 'PENDING'], [0, 'EXPIRED'], [600_000, 'EXPIRED']] as const) {
+        vi.setSystemTime(cutoff.getTime() + offsetMs);
+        const response = await request(app.getHttpServer()).get('/invitations').set('Cookie', session).expect(200);
+        expect(response.body).toEqual({
+          items: [{ id: entry.id, status: expectedStatus, createdAt: now.toISOString(), expiresAt: cutoff.toISOString() }],
+          nextCursor: null,
+        });
+      }
+    });
+
+    it.each([InvitationStatus.ACCEPTED, InvitationStatus.DECLINED, InvitationStatus.EXPIRED])(
+      'preserves a recorded %s after the deadline', async status => {
+        findMany.mockResolvedValue([{ ...entry, status, expiresAt: now }]);
+        const response = await inbox().expect(200);
+        expect(response.body.items[0].status).toBe(status);
+      },
+    );
+
+    it.each(['limit=0', 'limit=101', 'limit=1.5', 'limit=1&limit=2', 'cursor=invalid',
+      `inviteeUserId=${organizer.id}`, 'email=other@example.com'])('rejects query input %s', async queryString => {
+      await inbox(`?${queryString}`).expect(400);
+      expect(findMany).not.toHaveBeenCalled();
+    });
+
+    it('requires login and a completed username', async () => {
+      await request(app.getHttpServer()).get('/invitations').expect(401);
+      findUser.mockResolvedValue({ id: inviteeId, username: null });
+      await inbox().expect(403);
+      expect(findMany).not.toHaveBeenCalled();
+    });
   });
 });
