@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, Req, UseGuards, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards, ValidationPipe } from '@nestjs/common';
 import { AccessTokenGuard } from '../auth/access-token.guard.js';
-import type { AuthenticatedRequest } from '../auth/auth.types.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { UsernameRequiredGuard } from '../users/username-required.guard.js';
 import { CreateEventDto } from './dto/create-event.dto.js';
 import { EventsService } from './events.service.js';
@@ -15,61 +15,61 @@ export class EventsController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @Header('Cache-Control', 'no-store')
-  remove(@Req() request: AuthenticatedRequest, @Param('id', new ParseUUIDPipe()) id: string) {
-    return this.eventsService.remove(request.user.id, id);
+  remove(@CurrentUser('id') ownerId: string, @Param('id', new ParseUUIDPipe()) id: string) {
+    return this.eventsService.remove(ownerId, id);
   }
 
   // Keep the static route before GET :id so "trash" is not parsed as a UUID.
   @Get('trash')
   @Header('Cache-Control', 'no-store')
-  listTrash(@Req() request: AuthenticatedRequest) {
-    return this.eventsService.listTrash(request.user.id);
+  listTrash(@CurrentUser('id') ownerId: string) {
+    return this.eventsService.listTrash(ownerId);
   }
 
   @Post(':id/restore')
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
-  restore(@Req() request: AuthenticatedRequest, @Param('id', new ParseUUIDPipe()) id: string) {
-    return this.eventsService.restore(request.user.id, id);
+  restore(@CurrentUser('id') ownerId: string, @Param('id', new ParseUUIDPipe()) id: string) {
+    return this.eventsService.restore(ownerId, id);
   }
 
   @Patch(':id')
   @Header('Cache-Control', 'no-store')
   update(
-    @Req() request: AuthenticatedRequest,
+    @CurrentUser('id') ownerId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
     body: UpdateEventDto,
   ) {
-    return this.eventsService.update(request.user.id, id, body);
+    return this.eventsService.update(ownerId, id, body);
   }
 
   @Get()
   @Header('Cache-Control', 'no-store')
   list(
-    @Req() request: AuthenticatedRequest,
+    @CurrentUser('id') ownerId: string,
     @Query(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
     query: ListEventsQueryDto,
   ) {
-    return this.eventsService.list(request.user.id, query);
+    return this.eventsService.list(ownerId, query);
   }
 
   @Get(':id')
   @Header('Cache-Control', 'no-store')
   findById(
-    @Req() request: AuthenticatedRequest,
+    @CurrentUser('id') ownerId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
-    return this.eventsService.findById(request.user.id, id);
+    return this.eventsService.findById(ownerId, id);
   }
 
   @Post()
   @Header('Cache-Control', 'no-store')
   create(
-    @Req() request: AuthenticatedRequest,
+    @CurrentUser('id') ownerId: string,
     @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
     body: CreateEventDto,
   ) {
-    return this.eventsService.create(request.user.id, body);
+    return this.eventsService.create(ownerId, body);
   }
 }

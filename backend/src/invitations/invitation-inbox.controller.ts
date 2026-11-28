@@ -1,6 +1,6 @@
-import { Controller, Get, Header, Param, ParseUUIDPipe, Query, Req, UseGuards, ValidationPipe } from '@nestjs/common';
+import { Controller, Get, Header, Param, ParseUUIDPipe, Query, UseGuards, ValidationPipe } from '@nestjs/common';
 import { AccessTokenGuard } from '../auth/access-token.guard.js';
-import type { AuthenticatedRequest } from '../auth/auth.types.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { CursorPaginationQueryDto } from '../common/dto/cursor-pagination-query.dto.js';
 import { UsernameRequiredGuard } from '../users/username-required.guard.js';
 import { InvitationsService } from './invitations.service.js';
@@ -13,19 +13,19 @@ export class InvitationInboxController {
   @Get()
   @Header('Cache-Control', 'no-store')
   list(
-    @Req() request: AuthenticatedRequest,
+    @CurrentUser('id') recipientId: string,
     @Query(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
     query: CursorPaginationQueryDto,
   ) {
-    return this.invitationsService.listForRecipient(request.user.id, query);
+    return this.invitationsService.listForRecipient(recipientId, query);
   }
 
   @Get(':invitationId')
   @Header('Cache-Control', 'no-store')
   findPreview(
-    @Req() request: AuthenticatedRequest,
+    @CurrentUser('id') recipientId: string,
     @Param('invitationId', ParseUUIDPipe) invitationId: string,
   ) {
-    return this.invitationsService.findPreviewForRecipient(request.user.id, invitationId);
+    return this.invitationsService.findPreviewForRecipient(recipientId, invitationId);
   }
 }

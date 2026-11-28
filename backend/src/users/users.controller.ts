@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Header, Put, Query, Req, UseGuards, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Get, Header, Put, Query, UseGuards, ValidationPipe } from '@nestjs/common';
 import { AccessTokenGuard } from '../auth/access-token.guard.js';
-import type { AuthenticatedRequest } from '../auth/auth.types.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { UsersService } from './users.service.js';
 import { UsernameAvailabilityQueryDto } from './dto/username-availability-query.dto.js';
 import { SetUsernameDto } from './dto/set-username.dto.js';
@@ -25,20 +25,20 @@ export class UsersController {
     @UseGuards(AccessTokenGuard)
     @Header('Cache-Control', 'no-store')
     setUsername(
-        @Req() request: AuthenticatedRequest,
+        @CurrentUser('id') userId: string,
         @Body(new ValidationPipe({
             transform: true,
             whitelist: true,
             forbidNonWhitelisted: true,
         })) body: SetUsernameDto,
     ) {
-        return this.usersService.setUsername(request.user.id, body.username);
+        return this.usersService.setUsername(userId, body.username);
     }
 
     @Get('me')
     @UseGuards(AccessTokenGuard)
     @Header('Cache-Control', 'no-store')
-    getMe(@Req() request: AuthenticatedRequest) {
-        return this.usersService.getCurrentUser(request.user.id);
+    getMe(@CurrentUser('id') userId: string) {
+        return this.usersService.getCurrentUser(userId);
     }
 }
