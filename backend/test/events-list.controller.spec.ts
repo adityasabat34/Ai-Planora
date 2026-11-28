@@ -96,6 +96,8 @@ describe('GET /events', () => {
     { from: '2026-12-01T05:30:00+05:30', to: range.from },
     { ...range, from: [range.from, range.from] },
     { ...range, ownerId: user.id }, { ...range, unexpected: 'value' },
+    { ...range, limit: 0 }, { ...range, limit: 101 }, { ...range, limit: '1.5' },
+    { ...range, limit: ['1', '2'] }, { ...range, cursor: 'invalid' },
   ])('rejects invalid queries before event lookup (%j)', async query => {
     await request(app.getHttpServer()).get('/events').set('Cookie', cookie).query(query).expect(400);
     expect(findMany).not.toHaveBeenCalled();

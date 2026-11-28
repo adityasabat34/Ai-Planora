@@ -1,4 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { paginateByCursor } from '../common/cursor-pagination.js';
+import type { CursorPaginationQueryDto } from '../common/dto/cursor-pagination-query.dto.js';
 import type { CreateEventDto } from './dto/create-event.dto.js';
 import { EventsRepository } from './events.repository.js';
 import type { ListEventsQueryDto } from './dto/list-events-query.dto.js';
@@ -20,9 +22,15 @@ export class EventsService {
     }
   }
 
-  listTrash(ownerId: string) {
+  listTrash(ownerId: string, query: CursorPaginationQueryDto) {
     const now = new Date();
-    return this.eventsRepository.findTrash(ownerId, new Date(now.getTime() - EVENT_TRASH_RETENTION_MS), now);
+    const cutoff = new Date(now.getTime() - EVENT_TRASH_RETENTION_MS);
+    if (query.limit === undefined && query.cursor === undefined) {
+      return this.eventsRepository.findTrash(ownerId, cutoff, now);
+    }
+    return paginateByCursor(query, (take, cursor) =>
+      this.eventsRepository.findTrash(ownerId, cutoff, now, take, cursor),
+    );
   }
 
   async restore(ownerId: string, id: string) {
@@ -70,7 +78,12 @@ export class EventsService {
     if (!(from.getTime() < to.getTime())) {
       throw new BadRequestException('to must be after from');
     }
-    return this.eventsRepository.findOverlapping(ownerId, from, to);
+    if (query.limit === undefined && query.cursor === undefined) {
+      return this.eventsRepository.findOverlapping(ownerId, from, to);
+    }
+    return paginateByCursor(query, (take, cursor) =>
+      this.eventsRepository.findOverlapping(ownerId, from, to, take, cursor),
+    );
   }
 
   async findById(ownerId: string, id: string) {

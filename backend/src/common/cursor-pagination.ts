@@ -1,9 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
-import type { CursorPaginationQueryDto } from './dto/cursor-pagination-query.dto.js';
+import { DEFAULT_PAGE_SIZE, type CursorPaginationQueryDto } from './dto/cursor-pagination-query.dto.js';
 
 /** The repository must apply its access filters, use a stable order, and include the cursor row. */
 export async function paginateByCursor<T extends { id: string }>(
-  { limit, cursor }: CursorPaginationQueryDto,
+  { limit = DEFAULT_PAGE_SIZE, cursor }: CursorPaginationQueryDto,
   fetchRows: (take: number, cursor?: string) => Promise<readonly T[]>,
   invalidCursorMessage = 'Invalid cursor',
 ) {

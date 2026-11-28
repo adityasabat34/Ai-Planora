@@ -104,6 +104,20 @@ describe('Event recycle bin', () => {
     expect(response.body).toEqual([]);
   });
 
+  it('opts into a bounded page and reports an empty result with pagination metadata', async () => {
+    const response = await request(app.getHttpServer()).get('/events/trash').set('Cookie', cookie)
+      .query({ limit: 100 }).expect(200);
+    expect(response.body).toEqual({ items: [], nextCursor: null });
+    expect(findMany).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      where: { ownerId: user.id, deletedAt: { gt: cutoff, lte: now } }, take: 101,
+    }));
+  });
+
+  it.each([{ limit: 101 }, { cursor: 'invalid' }])('rejects invalid trash pagination (%j)', async query => {
+    await request(app.getHttpServer()).get('/events/trash').set('Cookie', cookie).query(query).expect(400);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
   it('restores only an owned row deleted less than 21 days ago in one conditional write', async () => {
     const response = await request(app.getHttpServer()).post(`/events/${event.id}/restore`)
       .set('Cookie', cookie).expect(200);

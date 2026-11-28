@@ -90,6 +90,35 @@ describe.runIf(testDatabaseUrl)('Event invitations with PostgreSQL', () => {
     }
   });
 
+  it.each([
+    { path: '/events', deleted: false },
+    { path: '/events/trash', deleted: true },
+  ])('pages $path through all tied events and rejects another owner’s cursor', async ({ path, deleted }) => {
+    const ids = Array.from({ length: 4 }, () => randomUUID()).sort();
+    const foreignId = randomUUID();
+    const startTime = '2035-01-02T09:00:00Z';
+    const endTime = '2035-01-02T10:00:00Z';
+    const deletedAt = deleted ? new Date() : null;
+    await db.event.createMany({ data: [
+      ...ids.map(id => ({ id, ownerId: inboxUserId, title: 'Paged event', startTime, endTime, deletedAt })),
+      { id: foreignId, ownerId: guestId, title: 'Other owner', startTime, endTime, deletedAt },
+    ] });
+
+    const filters = deleted ? {} : { from: '2035-01-01T00:00:00Z', to: '2035-02-01T00:00:00Z' };
+    const list = (query: { limit?: number; cursor?: string } = {}) => request(app.getHttpServer())
+      .get(path).set('Cookie', inboxCookie).query({ ...filters, ...query });
+
+    const all = await list().expect(200);
+    const first = await list({ limit: 2 }).expect(200);
+    expect(first.body).toMatchObject({ nextCursor: ids[1], items: ids.slice(0, 2).map(id => ({ id })) });
+    const second = await list({ limit: 2, cursor: first.body.nextCursor }).expect(200);
+    expect(second.body).toMatchObject({ nextCursor: null, items: ids.slice(2).map(id => ({ id })) });
+    expect([...first.body.items, ...second.body.items]).toEqual(all.body);
+
+    const invalid = await list({ cursor: foreignId }).expect(400);
+    expect(invalid.body.message).toBe('Invalid cursor');
+  });
+
   it('commits one invitation for concurrent sends and keeps organizer data private', async () => {
     const event = await createEvent();
     const responses = await Promise.all([invite(event.id, guestEmail), invite(event.id, ` ${guestEmail.toUpperCase()} `)]);

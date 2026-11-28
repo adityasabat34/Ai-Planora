@@ -23,10 +23,12 @@ export class EventsRepository {
     });
   }
 
-  findTrash(ownerId: string, cutoff: Date, now: Date) {
+  findTrash(ownerId: string, cutoff: Date, now: Date, take?: number, cursor?: string) {
     return this.prisma.event.findMany({
       where: { ownerId, deletedAt: { gt: cutoff, lte: now } },
       orderBy: [{ deletedAt: 'desc' }, { id: 'asc' }],
+      ...(take !== undefined && { take }),
+      ...(cursor !== undefined && { cursor: { id: cursor } }),
       select: {
         id: true, ownerId: true, title: true, startTime: true, endTime: true,
         location: true, privateNote: true, createdAt: true, updatedAt: true, deletedAt: true,
@@ -95,11 +97,13 @@ export class EventsRepository {
     }
   }
 
-  findOverlapping(ownerId: string, from: Date, to: Date) {
+  findOverlapping(ownerId: string, from: Date, to: Date, take?: number, cursor?: string) {
     return this.prisma.event.findMany({
       // Half-open intervals: merely touching either boundary is not an overlap.
       where: { ownerId, deletedAt: null, startTime: { lt: to }, endTime: { gt: from } },
       orderBy: [{ startTime: 'asc' }, { id: 'asc' }],
+      ...(take !== undefined && { take }),
+      ...(cursor !== undefined && { cursor: { id: cursor } }),
       select: {
         id: true,
         ownerId: true,

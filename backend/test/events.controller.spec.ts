@@ -126,10 +126,10 @@ describe('Events endpoints', () => {
     });
   });
 
-  it('persists an event for the authenticated owner and returns 201', async () => {
+  it('persists an event for the authenticated owner and returns 201 with its canonical URL', async () => {
     const response = await request(app.getHttpServer()).post('/events').set('Cookie', cookie)
       .send({ ...body, title: ' Personal plan ', location: ' Office ', privateNote: 'Bring notes' })
-      .expect(201);
+      .expect(201).expect('Location', `/events/${savedEvent.id}`);
     expect(create).toHaveBeenCalledExactlyOnceWith({
       data: {
         ownerId: user.id, title: body.title,
