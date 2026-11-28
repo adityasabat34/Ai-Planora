@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { InMemoryMailTransport, MailMessageError, MailTransport } from '@nestjs/mail';
 import { Test } from '@nestjs/testing';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { randomUUID } from 'node:crypto';
@@ -18,11 +19,17 @@ describe.runIf(testDatabaseUrl)('Event invitations with PostgreSQL', () => {
   const guestEmail = `${guestId}@example.test`;
   const inboxUserId = randomUUID();
   const inboxEmail = `${inboxUserId}@example.test`;
+  const signupEmail = `${randomUUID()}@example.test`;
+  const googleSignupEmail = `${randomUUID()}@example.test`;
+  const frontendInvitationUrl = 'https://calendar.example.test/account/register?source=invitation';
+  const mailbox = new InMemoryMailTransport();
   let db: PrismaClient;
   let app: INestApplication;
   let ownerCookie: string;
   let guestCookie: string;
   let inboxCookie: string;
+
+  beforeEach(() => mailbox.clear());
 
   function hoursFromNow(hours: number) {
     return new Date(Date.now() + hours * 60 * 60 * 1000);
@@ -57,7 +64,10 @@ describe.runIf(testDatabaseUrl)('Event invitations with PostgreSQL', () => {
     db = new PrismaClient({ adapter: new PrismaPg({ connectionString: testDatabaseUrl, options: '-c timezone=Asia/Kolkata' }) });
     const module = await Test.createTestingModule({ imports: [EventsModule, InvitationsModule] })
       .overrideProvider(PrismaService).useValue(db)
-      .overrideProvider(ConfigService).useValue(new ConfigService({ JWT_ACCESS_SECRET: 'postgres-invitation-test-secret' }))
+      .overrideProvider(MailTransport).useValue(mailbox)
+      .overrideProvider(ConfigService).useValue(new ConfigService({
+        JWT_ACCESS_SECRET: 'postgres-invitation-test-secret', NODE_ENV: 'test', FRONTEND_INVITATION_URL: frontendInvitationUrl,
+      }))
       .compile();
     app = module.createNestApplication({ logger: false });
     await app.init();
@@ -72,6 +82,7 @@ describe.runIf(testDatabaseUrl)('Event invitations with PostgreSQL', () => {
 
   afterAll(async () => {
     try {
+      await db?.user.deleteMany({ where: { email: { in: [signupEmail, googleSignupEmail] } } });
       await db?.user.deleteMany({ where: { id: { in: [ownerId, guestId, inboxUserId] } } });
     } finally {
       await app?.close();
@@ -84,6 +95,7 @@ describe.runIf(testDatabaseUrl)('Event invitations with PostgreSQL', () => {
     const responses = await Promise.all([invite(event.id, guestEmail), invite(event.id, ` ${guestEmail.toUpperCase()} `)]);
     expect(responses.map(response => response.status).sort((a, b) => a - b)).toEqual([200, 201]);
     expect(responses[0]!.body).toEqual(responses[1]!.body);
+    expect(mailbox.filter({ to: guestEmail })).toHaveLength(1);
     const stored = await storedInvitation(event.id);
     expect(stored).toMatchObject({ id: responses[0]!.body.id, inviteeEmail: guestEmail, inviteeUserId: guestId, status: 'PENDING' });
     expect(stored.expiresAt.getTime() - stored.createdAt.getTime()).toBe(24 * 60 * 60 * 1000);
@@ -187,5 +199,90 @@ describe.runIf(testDatabaseUrl)('Event invitations with PostgreSQL', () => {
     const stored = await storedInvitation(olderEvent.id);
     expect(stored.status).toBe('PENDING');
     expect(await db.eventMember.count({ where: { userId: inboxUserId } })).toBe(0);
+  });
+
+  it('lets Riya open only her visible invitation previews after ordinary signup, including an expired invite', async () => {
+    const liveEvent = await createEvent();
+    const earlyEvent = await createEvent(hoursFromNow(2));
+    const calendar = await request(app.getHttpServer()).get(`/events/${earlyEvent.id}`).set('Cookie', ownerCookie).expect(200);
+    const live = await invite(liveEvent.id, signupEmail).expect(201);
+    await invite(liveEvent.id, signupEmail).expect(200);
+    expect(mailbox.filter({ to: signupEmail })).toHaveLength(1);
+    expect(mailbox.assertSent({ to: signupEmail }).link().href).toBe(frontendInvitationUrl);
+    const early = await invite(earlyEvent.id, signupEmail).expect(201);
+    const foreign = await invite(liveEvent.id, guestEmail).expect(201);
+    const unclaimed = await invite(liveEvent.id, 'another-recipient@example.test').expect(201);
+    expect((await storedInvitation(earlyEvent.id)).inviteeUserId).toBeNull();
+
+    const afterEventStart = hoursFromNow(3);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(afterEventStart);
+      const organizerSession = `access_token=${await app.get(JwtService).signAsync({ sub: ownerId })}`;
+      const riya = request.agent(app.getHttpServer());
+      const registration = await riya.post('/auth/register')
+        .send({ fullName: 'Riya', email: ` ${signupEmail.toUpperCase()} `, password: 'test-password-97' }).expect(201);
+      await riya.put('/users/me/username').send({ username: signupEmail.slice(0, 8) }).expect(200);
+      const inbox = await riya.get('/invitations').expect(200);
+      expect(inbox.body.items).toHaveLength(2);
+      expect(inbox.body.items).toEqual(expect.arrayContaining([
+        { id: live.body.id, status: 'PENDING', createdAt: live.body.createdAt, expiresAt: live.body.expiresAt },
+        { id: early.body.id, status: 'EXPIRED', createdAt: early.body.createdAt, expiresAt: early.body.expiresAt },
+      ]));
+
+      const expiredPath = `/invitations/${early.body.id}`;
+      const preview = await riya.get(expiredPath).expect(200).expect('Cache-Control', 'no-store');
+      expect(preview.body).toEqual({
+        id: early.body.id,
+        status: 'EXPIRED',
+        organizer: { fullName: 'Invitation test user', username: ownerId.replaceAll('-', '').slice(0, 30), email: `${ownerId}@example.test` },
+        event: {
+          title: calendar.body.title, startTime: calendar.body.startTime, endTime: calendar.body.endTime, timeZone: 'UTC',
+        },
+      });
+      await riya.get(`/invitations/${live.body.id}`).expect(200).expect(({ body }) => {
+        expect(body.status).toBe('PENDING');
+      });
+      await riya.get(`/invitations/${foreign.body.id}`).expect(404);
+      await riya.get(`/invitations/${unclaimed.body.id}`).expect(404);
+      await riya.get(`/invitations/${randomUUID()}`).expect(404);
+      await request(app.getHttpServer()).get(expiredPath).set('Cookie', organizerSession).expect(404);
+      expect(await storedInvitation(earlyEvent.id)).toMatchObject({ inviteeUserId: registration.body.id, status: 'PENDING' });
+      expect((await db.eventInvitation.findUniqueOrThrow({ where: { id: unclaimed.body.id } })).inviteeUserId).toBeNull();
+      expect(await db.eventMember.count({ where: { userId: registration.body.id } })).toBe(0);
+
+      await request(app.getHttpServer()).delete(`/events/${earlyEvent.id}`).set('Cookie', organizerSession).expect(204);
+      await riya.get(expiredPath).expect(404);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('links an invitation sent concurrently with Google registration to the same account', async () => {
+    const event = await createEvent();
+    const identity = { email: googleSignupEmail, fullName: 'Google Guest', googleSub: randomUUID() };
+    const signupCookie = await app.get(JwtService).signAsync(identity, { audience: 'planora:google-signup', expiresIn: 600 });
+    const google = request.agent(app.getHttpServer());
+    const [registration, issued] = await Promise.all([
+      google.post('/auth/google/register').set('Cookie', `google_signup=${signupCookie}`).send({ fullName: identity.fullName }).expect(200),
+      invite(event.id, googleSignupEmail).expect(201),
+    ]);
+    await google.put('/users/me/username').send({ username: googleSignupEmail.slice(0, 8) }).expect(200);
+    const inbox = await google.get('/invitations').expect(200);
+    expect(inbox.body.items).toEqual([expect.objectContaining({ id: issued.body.id, status: 'PENDING' })]);
+    expect((await storedInvitation(event.id)).inviteeUserId).toBe(registration.body.id);
+    expect(mailbox.assertSent({ to: googleSignupEmail }).link().href).toBe(frontendInvitationUrl);
+  });
+
+  it('retries a failed delivery with the original invitation and sends one registration email', async () => {
+    const event = await createEvent();
+    mailbox.failNext(new MailMessageError('to', 'Test mail delivery failed'));
+    await invite(event.id, guestEmail).expect(503);
+    const saved = await storedInvitation(event.id);
+    const responses = await Promise.all([invite(event.id, guestEmail).expect(200), invite(event.id, guestEmail).expect(200)]);
+    for (const response of responses) expect(response.body.id).toBe(saved.id);
+    await invite(event.id, guestEmail).expect(200);
+    expect(mailbox.filter({ to: guestEmail })).toHaveLength(1);
+    expect(mailbox.assertSent({ to: guestEmail }).link().href).toBe(frontendInvitationUrl);
   });
 });

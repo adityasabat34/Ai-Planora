@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Database access
+
+Use Prisma Client's model APIs as the first choice for backend reads, writes, filters, relations, and transactions. Reserve raw SQL for required PostgreSQL operations outside the ORM API, such as advisory locks or transaction-local settings. Keep the raw SQL scoped to that operation, bind dynamic values as parameters, and explain why the SQL is needed near the statement.
+
 ## NestJS
 
 This app's version of NestJS is likely newer than what you know. https://docs.nestjs.com/llms.txt indexes its documentation, with a markdown page per chapter.

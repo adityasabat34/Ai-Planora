@@ -1,10 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { InMemoryMailTransport, MailTransport } from '@nestjs/mail';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { PrismaService } from '../src/database/prisma.service.js';
-import { InvitationStatus } from '../src/generated/prisma/client.js';
+import { InvitationStatus, Prisma } from '../src/generated/prisma/client.js';
 import { InvitationsModule } from '../src/invitations/invitations.module.js';
 
 describe('Event invitations', () => {
@@ -23,11 +24,18 @@ describe('Event invitations', () => {
   const findUser = vi.fn();
   const query = vi.fn();
   const findExisting = vi.fn();
+  const findUniqueOrThrow = vi.fn();
   const insert = vi.fn();
   const findOne = vi.fn();
   const findMany = vi.fn();
-  const tx = { $queryRaw: query, $executeRaw: vi.fn(), eventInvitation: { findUnique: findExisting, findFirst: findOne, findMany, create: insert } };
-  const transaction = vi.fn<(work: (client: typeof tx) => Promise<unknown>) => Promise<unknown>>();
+  const updateMany = vi.fn();
+  const tx = {
+    $queryRaw: query, $executeRaw: vi.fn(),
+    eventInvitation: { findUnique: findExisting, findUniqueOrThrow, findFirst: findOne, findMany, create: insert, updateMany },
+  };
+  const transaction = vi.fn<(
+    work: (client: typeof tx) => Promise<unknown>, options?: { isolationLevel: Prisma.TransactionIsolationLevel },
+  ) => Promise<unknown>>();
   let app: INestApplication;
   let cookie: string;
   let recipientCookie: string;
@@ -36,6 +44,7 @@ describe('Event invitations', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(now);
     const module = await Test.createTestingModule({ imports: [InvitationsModule] })
+      .overrideProvider(MailTransport).useValue(new InMemoryMailTransport())
       .overrideProvider(PrismaService).useValue({
         $transaction: transaction, user: { findUnique: findUser },
       })
@@ -54,6 +63,7 @@ describe('Event invitations', () => {
     findExisting.mockResolvedValue(null);
     insert.mockResolvedValue(invitation);
     findOne.mockResolvedValue(invitation);
+    updateMany.mockResolvedValue({ count: 0 });
   });
 
   afterAll(async () => {
@@ -69,7 +79,7 @@ describe('Event invitations', () => {
     query.mockResolvedValueOnce([event]).mockResolvedValueOnce([{ id: inviteeId }]);
     const response = await post('  Guest@Example.com  ').expect(201);
     expect(insert).toHaveBeenCalledExactlyOnceWith({
-      data: { eventId, inviteeEmail: invitation.inviteeEmail, inviteeUserId: inviteeId, createdAt: now, expiresAt: invitation.expiresAt },
+      data: { eventId, inviteeEmail: invitation.inviteeEmail, inviteeUserId: inviteeId, createdAt: now, expiresAt: invitation.expiresAt, emailRetryAt: now },
       select: selected,
     });
     expect(findExisting).toHaveBeenCalledExactlyOnceWith({
@@ -87,7 +97,7 @@ describe('Event invitations', () => {
     query.mockResolvedValueOnce([{ ...event, startTime }]).mockResolvedValueOnce([]);
     await post(invitation.inviteeEmail).expect(201);
     expect(insert).toHaveBeenCalledWith(expect.objectContaining({
-      data: { eventId, inviteeEmail: invitation.inviteeEmail, inviteeUserId: null, createdAt: now, expiresAt: startTime },
+      data: { eventId, inviteeEmail: invitation.inviteeEmail, inviteeUserId: null, createdAt: now, expiresAt: startTime, emailRetryAt: now },
     }));
   });
 
@@ -216,6 +226,75 @@ describe('Event invitations', () => {
       findUser.mockResolvedValue({ id: inviteeId, username: null });
       await inbox().expect(403);
       expect(findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /invitations/:invitationId', () => {
+    const path = `/invitations/${invitation.id}`;
+    const preview = {
+      id: invitation.id, status: InvitationStatus.PENDING,
+      event: {
+        title: 'Study weekend', startTime: event.startTime, endTime: new Date('2026-11-30T15:00:00Z'),
+        owner: { fullName: organizer.fullName, username: organizer.username, email: organizer.email },
+      },
+    };
+
+    function open(invitationId = invitation.id) {
+      return request(app.getHttpServer()).get(`/invitations/${invitationId}`).set('Cookie', recipientCookie);
+    }
+
+    beforeEach(() => {
+      findUser.mockResolvedValue({ id: inviteeId, fullName: 'Riya', email: invitation.inviteeEmail, username: 'riya' });
+      findExisting.mockResolvedValue(preview);
+      findUniqueOrThrow.mockResolvedValue({ expiresAt: now });
+    });
+
+    it('returns only the preview fields and computes expiry at the deadline', async () => {
+      const response = await open().expect(200).expect('Cache-Control', 'no-store');
+      expect(response.body).toEqual({
+        id: preview.id, status: 'EXPIRED',
+        organizer: preview.event.owner,
+        event: {
+          title: preview.event.title, startTime: preview.event.startTime.toISOString(),
+          endTime: preview.event.endTime.toISOString(), timeZone: 'UTC',
+        },
+      });
+      expect(transaction).toHaveBeenCalledExactlyOnceWith(expect.any(Function), { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+      expect(findExisting).toHaveBeenCalledExactlyOnceWith({
+        where: { id: preview.id, inviteeUserId: inviteeId, event: { deletedAt: null } },
+        select: {
+          id: true, status: true,
+          event: { select: {
+            title: true, startTime: true, endTime: true, owner: { select: { fullName: true, username: true, email: true } },
+          } },
+        },
+      });
+      expect(findUniqueOrThrow).toHaveBeenCalledExactlyOnceWith({ where: { id: preview.id }, select: { expiresAt: true } });
+      expect(query).not.toHaveBeenCalled();
+    });
+
+    it.each([InvitationStatus.PENDING, InvitationStatus.ACCEPTED, InvitationStatus.DECLINED, InvitationStatus.EXPIRED])(
+      'returns %s before the deadline or when already recorded', async status => {
+        findExisting.mockResolvedValue({ ...preview, status });
+        if (status === InvitationStatus.PENDING) findUniqueOrThrow.mockResolvedValue({ expiresAt: invitation.expiresAt });
+        const response = await open().expect(200);
+        expect(response.body.status).toBe(status);
+      },
+    );
+
+    it('returns 404 when the recipient has no visible invitation with that ID', async () => {
+      findExisting.mockResolvedValue(null);
+      const response = await open().expect(404);
+      expect(response.body.message).toBe('Invitation not found');
+      expect(findUniqueOrThrow).not.toHaveBeenCalled();
+    });
+
+    it('requires login, completed username setup, and a valid UUID', async () => {
+      await request(app.getHttpServer()).get(path).expect(401);
+      await open('invalid').expect(400);
+      findUser.mockResolvedValue({ id: inviteeId, username: null });
+      await open().expect(403);
+      expect(transaction).not.toHaveBeenCalled();
     });
   });
 });

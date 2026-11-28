@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Query, Req, UseGuards, ValidationPipe } from '@nestjs/common';
+import { Controller, Get, Header, Param, ParseUUIDPipe, Query, Req, UseGuards, ValidationPipe } from '@nestjs/common';
 import { AccessTokenGuard } from '../auth/access-token.guard.js';
 import type { AuthenticatedRequest } from '../auth/auth.types.js';
 import { CursorPaginationQueryDto } from '../common/dto/cursor-pagination-query.dto.js';
@@ -18,5 +18,14 @@ export class InvitationInboxController {
     query: CursorPaginationQueryDto,
   ) {
     return this.invitationsService.listForRecipient(request.user.id, query);
+  }
+
+  @Get(':invitationId')
+  @Header('Cache-Control', 'no-store')
+  findPreview(
+    @Req() request: AuthenticatedRequest,
+    @Param('invitationId', ParseUUIDPipe) invitationId: string,
+  ) {
+    return this.invitationsService.findPreviewForRecipient(request.user.id, invitationId);
   }
 }

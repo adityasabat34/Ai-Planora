@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
+import { lockInvitationEmail } from '../database/lock-invitation-email.js';
 import { Prisma, SignInMethod } from '../generated/prisma/client.js';
 import { isPrismaError, PRISMA_ERROR_CODES } from '../database/prisma-errors.js';
 import type { CreateGoogleUserInput, CreatePasswordUserInput, CreateSessionInput } from './auth.types.js';
@@ -21,15 +22,19 @@ export class AuthRepository {
 
     private async createUser(input: Prisma.UserCreateInput) {
         try {
-            return await this.prisma.user.create({
-                data: input,
-                select: {
-                    id: true,
-                    fullName: true,
-                    email: true,
-                    username: true,
-                },
-            });
+            return await this.prisma.$transaction(async tx => {
+                await lockInvitationEmail(tx, input.email);
+                const user = await tx.user.create({
+                    data: input,
+                    select: { id: true, fullName: true, email: true, username: true },
+                });
+                // Include expired invitations so someone who signs up late can still see them.
+                await tx.eventInvitation.updateMany({
+                    where: { inviteeEmail: user.email, inviteeUserId: null },
+                    data: { inviteeUserId: user.id },
+                });
+                return user;
+            }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
         } catch (error) {
             if (isPrismaError(error, PRISMA_ERROR_CODES.UNIQUE_CONSTRAINT)) {
                 throw new DuplicateAccountError('Email is already in use');

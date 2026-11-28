@@ -67,13 +67,15 @@ model EventInvitation {
   createdAt      DateTime         @default(now()) @db.Timestamptz
   expiresAt      DateTime         @db.Timestamptz
   respondedAt    DateTime?        @db.Timestamptz
-  emailTokenHash String?          @unique @db.VarChar(64)
+  /// Earliest time a repeat send can retry delivery. Null once the email has been sent.
+  emailRetryAt   DateTime?        @db.Timestamptz
 
   event   Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
   invitee User? @relation(fields: [inviteeUserId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, inviteeEmail])
   @@index([inviteeUserId, createdAt])
+  @@index([inviteeEmail, inviteeUserId])
 }
 
 model EventMember {
